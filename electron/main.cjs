@@ -329,7 +329,10 @@ async function createWindow() {
     show: !smoke, autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: false },
   });
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    try { void shell.openExternal(externalUrl(url)); } catch { /* Only approved map links may leave the app. */ }
+    return { action: 'deny' };
+  });
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== rendererUrl) event.preventDefault(); });
   mainWindow.on('closed', () => {
     for (const pane of panes.values()) if (!pane.view.webContents.isDestroyed()) pane.view.webContents.close();

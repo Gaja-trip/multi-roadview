@@ -1,4 +1,4 @@
-import { createBrowserApi } from './web-api.js';
+import { createBrowserApi, kakaoUrl } from './web-api.js';
 import { createComparison } from './comparison.js';
 
 const $ = selector => document.querySelector(selector);
@@ -54,21 +54,17 @@ function readPlaces(key) {
 function storePlaces(key, values) { try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* Browsing can continue if local storage is full. */ } }
 
 const desktop = Boolean(window.roadview?.desktop);
-const api = window.roadview || createBrowserApi(DEMO.url);
+const api = window.roadview || createBrowserApi();
 const comparison = createComparison(DEMO.url);
 
 let current = { ...DEMO };
 let baseUrl = DEMO.url;
-let splitCount = 4;
-let viewMode = 'compare';
-let focusedPane = null;
+let splitCount = 2;
 let recent = readPlaces('roadview-recent');
 let saved = readPlaces('roadview-saved');
 let toastTimer;
-let layoutFrame;
 let searching = false;
 let linkLocation = false;
-const paneStates = Array.from({ length: 4 }, () => ({ status: 'idle', url: baseUrl, date: '', error: '' }));
 function roadviewUrl(place) { return `https://map.kakao.com/link/roadview/${place.lat},${place.lng}`; }
 function toast(message) { $('#toast-message').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500); }
 function showError(id, message = '') { const element = $(`#${id}`); element.textContent = message; element.hidden = !message; }
@@ -116,82 +112,19 @@ async function moveTo(place) {
   if (place.url) await api.setLink({ index: 'all', url: place.url });
   current = point; baseUrl = place.url || roadviewUrl(point); linkLocation = false;
   comparison.navigate(baseUrl);
-  for (let index = 0; index < 4; index++) {
-    paneStates[index] = { ...paneStates[index], url: baseUrl, date: '', error: '', status: 'loading' };
-    updatePane(index);
-  }
   recent = [point, ...recent.filter(item => !samePlace(item, point))].slice(0, 6);
   storePlaces('roadview-recent', recent); renderPlaces(); displayLocation();
   $('#search-results').replaceChildren(); showError('search-error');
   toast(`${point.name} 주변 로드뷰로 모든 화면을 이동합니다. 촬영일을 다시 선택해 주세요.`);
 }
 
-function makeCards() {
-  for (let index = 0; index < 4; index++) {
-    const card = document.createElement('section'); card.className = 'view-card'; card.dataset.index = index; card.setAttribute('aria-label', `${index + 1}번 비교 시점`);
-    card.innerHTML = `<header class="card-header"><span class="card-number">0${index + 1}</span><h3>비교 시점 ${index + 1}</h3><button class="card-date" data-action="history" aria-label="${index + 1}번 화면 촬영일 선택"><span data-icon="clock"></span><span class="date-label">촬영일 선택</span><span data-icon="chevron-down"></span></button><button class="icon-button" data-action="expand" aria-label="${index + 1}번 화면 크게 보기" title="크게 보기"><span data-icon="expand"></span></button></header><div class="view-surface" id="surface-${index}"><div class="surface-background"></div><div class="surface-placeholder"></div></div><footer class="card-footer"><span class="card-status"><i></i><span>연결 준비 중</span></span><div class="card-footer-actions"><button data-action="reload" aria-label="${index + 1}번 화면 새로고침"><span data-icon="refresh"></span><span class="footer-button-label">새로고침</span></button><button data-action="external" aria-label="${index + 1}번 화면 카카오맵 원본 열기"><span class="footer-button-label">원본 열기</span><span data-icon="external"></span></button></div></footer>`;
-    card.addEventListener('click', event => {
-      const action = event.target.closest('[data-action]')?.dataset.action;
-      if (!action) return;
-      if (action === 'expand') { focusedPane = focusedPane === index ? null : index; renderLayout(); }
-      if (action === 'history') void openDates(index);
-      if (action === 'reload') void safely(() => api.reload(index));
-      if (action === 'external') void safely(() => api.openExternal(paneStates[index].url || baseUrl));
-    });
-    $('#view-grid').append(card); updatePane(index);
-  }
-}
-
-function updatePane(index) {
-  const card = $(`.view-card[data-index="${index}"]`); if (!card) return;
-  const state = paneStates[index];
-  card.querySelector('.date-label').textContent = state.date || '촬영일 선택';
-  const statuses = { idle: '연결 준비 중', loading: '카카오맵 연결 중…', connected: state.date ? `촬영 ${state.date}` : '카카오맵 연결 · 촬영일은 원본에서 확인', error: '연결을 확인해 주세요', preview: '브라우저 미리보기' };
-  card.querySelector('.card-status>span').textContent = statuses[state.status] || '연결 준비 중';
-  card.querySelector('.card-status i').className = state.status;
-  const placeholder = card.querySelector('.surface-placeholder'); placeholder.replaceChildren();
-  const visual = document.createElement('div'); visual.className = state.status === 'loading' ? 'spinner' : 'surface-icon';
-  if (state.status !== 'loading') visual.innerHTML = icon(state.status === 'error' ? 'info' : 'panorama');
-  const heading = document.createElement('h4');
-  heading.textContent = state.status === 'error' ? '로드뷰에 연결하지 못했습니다' : '카카오맵 로드뷰 연결 중';
-  const description = document.createElement('p');
-  description.textContent = state.error || '원본의 촬영일 메뉴에서 원하는 시기를 선택할 수 있습니다.';
-  placeholder.append(visual, heading, description);
-  const open = document.createElement('button'); open.className = 'text-button'; open.dataset.action = 'external'; open.textContent = '카카오맵에서 이 위치 보기 ↗'; placeholder.append(open);
-  const connected = paneStates.slice(0, splitCount).filter(item => item.status === 'connected').length;
-  $('#connection-status').textContent = viewMode === 'compare' ? '촬영일은 원본에서 확인' : `카카오맵 연결 ${connected}/${splitCount}`;
-  hydrateIcons(card);
-  scheduleLayout();
-}
-
 function renderLayout() {
-  $('#view-grid').hidden = viewMode === 'compare';
-  $('#comparison').hidden = viewMode !== 'compare';
-  if (viewMode === 'compare') comparison.mount();
-  $('#view-grid').className = `view-grid layout-${splitCount === 2 ? 'two' : 'four'}${focusedPane !== null ? ' focused' : ''}`;
-  $$('.view-card').forEach((card, index) => {
-    card.hidden = focusedPane !== null ? index !== focusedPane : index >= splitCount;
-    const expand = card.querySelector('[data-action="expand"]');
-    expand.setAttribute('aria-label', `${index + 1}번 화면 ${focusedPane === index ? '분할 보기로 돌아가기' : '크게 보기'}`);
-    expand.title = focusedPane === index ? '분할 보기로 돌아가기' : '크게 보기';
-    expand.innerHTML = icon(focusedPane === index ? 'collapse' : 'expand');
-  });
-  $('#view-count').textContent = viewMode === 'compare' ? 'A · B' : focusedPane !== null ? `${focusedPane + 1}번 화면 확대` : `${splitCount}개 화면`;
-  $('#single-compare').setAttribute('aria-pressed', String(viewMode === 'compare'));
-  $('#split-two').setAttribute('aria-pressed', String(viewMode === 'grid' && splitCount === 2)); $('#split-four').setAttribute('aria-pressed', String(viewMode === 'grid' && splitCount === 4));
-  const connected = paneStates.slice(0, splitCount).filter(item => item.status === 'connected').length;
-  $('#connection-status').textContent = viewMode === 'compare' ? '촬영일은 원본에서 확인' : `카카오맵 연결 ${connected}/${splitCount}`;
-  scheduleLayout();
+  comparison.setCount(splitCount);
+  $('#view-count').textContent = splitCount === 4 ? 'A · B · C · D' : 'A · B';
+  $('#split-two').setAttribute('aria-pressed', String(splitCount === 2));
+  $('#split-four').setAttribute('aria-pressed', String(splitCount === 4));
 }
-
-function scheduleLayout() { clearTimeout(layoutFrame); layoutFrame = setTimeout(syncLayout, 16); }
-function syncLayout() {
-  const rects = viewMode === 'compare' || document.querySelector('dialog[open]') ? [] : $$('.view-card:not([hidden]) .view-surface').map(element => {
-    const rect = element.getBoundingClientRect();
-    return { index: Number(element.closest('.view-card').dataset.index), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-  });
-  return api.layout(rects).catch(error => { if (desktop) toast(error.message); });
-}
+function syncLayout() { return api.layout([]); }
 
 function selectTab(id) {
   $$('.search-tabs [role="tab"]').forEach(button => { const active = button.dataset.tab === id; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; $(`#${button.dataset.tab}-panel`).hidden = !active; });
@@ -203,34 +136,8 @@ function showDialog(id) {
   syncLayout();
 }
 
-async function openDates(index) {
-  if (!desktop) { toast('각 로드뷰 원본의 왼쪽 위 촬영일·시계 버튼에서 과거 시기를 선택해 주세요. 크게 보기를 누르면 조작하기 편합니다.'); return; }
-  $('#date-dialog-title').textContent = `${index + 1}번 화면의 촬영 시기`;
-  $('#date-options').replaceChildren(); $('#date-loading').hidden = false; showError('date-error');
-  showDialog('date-dialog');
-  try {
-    const dates = await api.openHistory(index);
-    if (!$('#date-dialog').open) return;
-    $('#date-loading').hidden = true;
-    if (dates.length < 2) {
-      const info = document.createElement('p'); info.className = 'empty-state'; info.textContent = '이 촬영 지점에서 다른 시기의 목록을 찾지 못했습니다. 원본 화면의 날짜 메뉴를 이용하거나 주변 도로로 위치를 옮겨 주세요.'; $('#date-options').append(info);
-    }
-    for (const item of dates) {
-      const button = document.createElement('button'); button.className = 'date-option';
-      const date = document.createElement('span'); date.textContent = item.date;
-      const arrow = document.createElement('span'); arrow.innerHTML = icon('chevron-right');
-      button.append(date, arrow);
-      button.addEventListener('click', () => safely(async () => { $('#date-dialog').close(); await syncLayout(); await api.selectDate({ index, panoId: item.panoId }); toast(`${index + 1}번 화면을 ${item.date} 촬영 시기로 변경합니다.`); }));
-      $('#date-options').append(button);
-    }
-  } catch (error) { $('#date-loading').hidden = true; showError('date-error', error.message); }
-}
-
-hydrateIcons(); makeCards(); renderLayout(); renderPlaces(); displayLocation();
-api.onPane(({ index, ...state }) => { if (!Number.isInteger(index) || index < 0 || index > 3) return; paneStates[index] = { ...paneStates[index], ...state }; updatePane(index); });
-new ResizeObserver(scheduleLayout).observe($('#view-grid'));
-window.addEventListener('resize', scheduleLayout);
-window.addEventListener('scroll', scheduleLayout, true);
+hydrateIcons(); renderLayout(); renderPlaces(); displayLocation();
+void syncLayout();
 if (!desktop) {
   $('#app-mode').textContent = '웹 로드뷰';
   $('#workspace-notice').textContent = '카카오맵 원본의 촬영일을 선택해 비교하세요. 시기별 촬영 위치는 조금 다를 수 있습니다.';
@@ -275,21 +182,18 @@ $('#link-form').addEventListener('submit', async event => {
   event.preventDefault(); showError('link-error');
   try {
     const target = $('#link-target').value;
-    const url = await api.setLink({ url: $('#map-link').value.trim(), index: target === 'all' ? 'all' : Number(target) });
+    const url = kakaoUrl($('#map-link').value.trim());
     comparison.navigate(url, target);
     if (target === 'all') { baseUrl = url; linkLocation = true; current = { ...current, name: '카카오맵 링크의 위치', address: '좌표는 지도 링크 원본에서 확인해 주세요.' }; displayLocation(); }
-    const indexes = target === 'all' ? [0, 1, 2, 3] : [Number(target)];
-    for (const index of indexes) { paneStates[index] = { ...paneStates[index], url, date: '', status: 'loading' }; updatePane(index); }
-    if (target !== 'all' && (Number(target) >= splitCount || Number(target) >= 2)) { viewMode = 'grid'; splitCount = 4; focusedPane = null; renderLayout(); }
+    if (target !== 'all' && Number(target) >= 2) { splitCount = 4; renderLayout(); }
     toast('지도 링크를 열었습니다. 원본 로드뷰의 촬영일을 확인해 주세요.');
   } catch (error) { showError('link-error', error.message || '올바른 카카오맵 링크를 입력해 주세요.'); }
 });
 
 $$('[data-preset]').forEach(button => button.addEventListener('click', () => safely(() => moveTo(PRESETS[Number(button.dataset.preset)]))));
 $('#home').addEventListener('click', event => { event.preventDefault(); void safely(() => moveTo(DEMO)); });
-$('#single-compare').addEventListener('click', () => { viewMode = 'compare'; focusedPane = null; renderLayout(); });
-$('#split-two').addEventListener('click', () => { viewMode = 'grid'; splitCount = 2; focusedPane = null; renderLayout(); });
-$('#split-four').addEventListener('click', () => { viewMode = 'grid'; splitCount = 4; focusedPane = null; renderLayout(); });
+$('#split-two').addEventListener('click', () => { splitCount = 2; renderLayout(); });
+$('#split-four').addEventListener('click', () => { splitCount = 4; renderLayout(); });
 function setSidebar(collapsed) {
   document.body.classList.toggle('sidebar-collapsed', collapsed);
   $('#sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
@@ -297,7 +201,6 @@ function setSidebar(collapsed) {
   $('#sidebar-toggle-label').textContent = collapsed ? '메뉴 보이기' : '메뉴 숨기기';
   $('#sidebar').inert = collapsed;
   try { localStorage.setItem('roadview-sidebar-hidden', String(collapsed)); } catch { /* Optional preference. */ }
-  scheduleLayout();
 }
 try { setSidebar(localStorage.getItem('roadview-sidebar-hidden') === 'true'); } catch { setSidebar(false); }
 $('#sidebar-toggle').addEventListener('click', () => {
@@ -318,7 +221,7 @@ $$('[data-map]').forEach(button => button.addEventListener('click', () => safely
 })));
 $('#help-button').addEventListener('click', () => showDialog('help-dialog'));
 $$('[data-close-dialog]').forEach(button => button.addEventListener('click', () => button.closest('dialog').close()));
-$$('dialog').forEach(dialog => { dialog.addEventListener('close', scheduleLayout); dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } }); });
+$$('dialog').forEach(dialog => { dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } }); });
 $('#settings-button').addEventListener('click', () => safely(async () => {
   const settings = await api.settings();
   $('#settings-status').textContent = settings.hasKey ? '카카오 주소·장소 검색 연결됨' : desktop ? '기본 주소 검색 사용 중 · OpenStreetMap' : '웹 검색은 서버에서 연결합니다. 선택 사항: Vercel 환경 변수 KAKAO_REST_API_KEY 설정 후 재배포';
@@ -334,4 +237,3 @@ $('#settings-form').addEventListener('submit', async event => {
 });
 $('#remove-key').addEventListener('click', () => safely(async () => { await api.saveKey(''); $('#api-key').value = ''; $('#settings-dialog').close(); $('#search-credit').textContent = '주소 검색 © OpenStreetMap 기여자'; toast('카카오 검색 연결을 해제하고 기본 검색으로 변경했습니다.'); }));
 $('#developer-link').addEventListener('click', () => safely(() => api.openExternal('https://developers.kakao.com/')));
-document.addEventListener('keydown', event => { if (event.key === 'Escape' && !document.querySelector('dialog[open]') && focusedPane !== null) { focusedPane = null; renderLayout(); } });

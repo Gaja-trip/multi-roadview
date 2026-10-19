@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const dist = path.join(root, 'node_modules', 'electron', 'dist');
-const release = path.join(root, 'release', 'RoadviewTime-win32-x64');
+const release = path.join(root, 'release', 'RoadviewTime-v1.1.0-win32-x64');
 const application = path.join(release, 'resources', 'app');
 if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('이 패키지 스크립트는 Windows x64용입니다.');
 await fs.access(path.join(dist, 'electron.exe'));
