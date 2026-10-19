@@ -1,0 +1,20 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = fileURLToPath(new URL('../', import.meta.url));
+const dist = path.join(root, 'node_modules', 'electron', 'dist');
+const release = path.join(root, 'release', 'RoadviewTime-win32-x64');
+const application = path.join(release, 'resources', 'app');
+if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('이 패키지 스크립트는 Windows x64용입니다.');
+await fs.access(path.join(dist, 'electron.exe'));
+await fs.mkdir(application, { recursive: true });
+await fs.cp(dist, release, { recursive: true });
+await fs.copyFile(path.join(release, 'electron.exe'), path.join(release, 'RoadviewTime.exe'));
+await fs.unlink(path.join(release, 'electron.exe'));
+for (const name of ['index.html', 'src', 'package.json', 'README.md']) await fs.cp(path.join(root, name), path.join(application, name), { recursive: true });
+await fs.mkdir(path.join(application, 'electron'), { recursive: true });
+for (const name of ['main.cjs', 'preload.cjs', 'domain.cjs']) await fs.copyFile(path.join(root, 'electron', name), path.join(application, 'electron', name));
+await fs.copyFile(path.join(root, 'README.md'), path.join(release, '사용안내.md'));
+console.log(`Windows 실행 파일: ${path.join(release, 'RoadviewTime.exe')}`);
+console.log('이 폴더 전체를 복사하면 Node.js 설치 없이 실행할 수 있습니다.');

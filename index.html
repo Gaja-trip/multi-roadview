@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="theme-color" content="#f7f8fa">
+  <title>로드뷰 타임 · 같은 장소, 다른 시간</title>
+  <link rel="icon" href="./src/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./src/style.css">
+  <script type="module" src="./src/app.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <a class="brand" href="#" id="home" aria-label="로드뷰 타임 처음 위치로">
+      <span class="brand-icon" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>로드뷰 <strong>타임</strong><small>ROADVIEW TIME</small></span>
+      <span class="version">360°</span>
+    </a>
+    <div class="header-actions">
+      <span class="app-mode" id="app-mode"><i class="live-dot"></i> 데스크톱 멀티뷰</span>
+      <button class="button quiet" id="help-button"><span data-icon="help"></span><span class="optional-label">사용 안내</span></button>
+      <button class="button dark" id="copy-location"><span data-icon="link"></span>위치 링크 복사</button>
+    </div>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="위치 검색과 설정">
+      <div class="sidebar-scroll">
+        <div class="intro">
+          <p class="eyebrow">SAME PLACE, DIFFERENT TIMES</p>
+          <h1>거리의 변화를<br>한눈에<span class="yellow-dot">.</span></h1>
+          <p class="intro-description">익숙한 장소의 새로운 발견.<br>여러 시기의 로드뷰를 나란히 살펴보세요.</p>
+        </div>
+
+        <section class="current-location" aria-labelledby="current-label">
+          <div class="section-kicker" id="current-label"><span data-icon="pin"></span>현재 비교 위치 <span class="coordinate-system">WGS84</span></div>
+          <h2 id="location-name">서울시청</h2>
+          <p id="location-address">서울특별시 중구 세종대로 110</p>
+          <button class="coordinate-copy" id="copy-coordinates" title="위도·경도 복사"><span id="location-coordinates">37.566500, 126.978000</span><span data-icon="copy"></span></button>
+        </section>
+
+        <section class="search-section" aria-label="위치로 이동">
+          <div class="search-tabs" role="tablist" aria-label="이동 방법">
+            <button role="tab" aria-selected="true" aria-controls="address-panel" id="address-tab" data-tab="address">주소 검색</button>
+            <button role="tab" aria-selected="false" aria-controls="coordinates-panel" id="coordinates-tab" data-tab="coordinates" tabindex="-1">좌표 입력</button>
+            <button role="tab" aria-selected="false" aria-controls="link-panel" id="link-tab" data-tab="link" tabindex="-1">지도 링크</button>
+          </div>
+
+          <div role="tabpanel" id="address-panel" aria-labelledby="address-tab">
+            <form id="address-form">
+              <label for="address-query" class="field-label">주소 또는 장소명</label>
+              <div class="search-input"><span data-icon="search"></span><input type="search" id="address-query" placeholder="예: 서울시청, 세종대로 110" maxlength="200" autocomplete="off" required></div>
+              <button type="submit" class="button primary wide" id="search-submit"><span data-icon="search"></span><span>위치 검색</span><kbd>↵</kbd></button>
+            </form>
+            <p class="field-hint" id="search-hint">검색 결과를 선택하면 모든 화면이 이동합니다.</p>
+            <p class="inline-error" id="search-error" role="alert" hidden></p>
+            <div id="search-results" class="search-results" aria-live="polite"></div>
+            <div class="quick-places" aria-label="빠른 위치 선택"><span>바로 가기</span><button data-preset="1">광화문</button><button data-preset="2">강남역</button><button data-preset="3">부산역</button></div>
+            <p class="search-credit" id="search-credit">주소 검색 © OpenStreetMap 기여자</p>
+          </div>
+
+          <div role="tabpanel" id="coordinates-panel" aria-labelledby="coordinates-tab" hidden>
+            <form id="coordinates-form">
+              <label for="latitude" class="field-label">위도 <span>Latitude · −90 ~ 90</span></label>
+              <div class="input-unit"><input id="latitude" name="latitude" type="text" inputmode="decimal" value="37.566500" placeholder="37.566500" required><span>° N</span></div>
+              <label for="longitude" class="field-label">경도 <span>Longitude · −180 ~ 180</span></label>
+              <div class="input-unit"><input id="longitude" name="longitude" type="text" inputmode="decimal" value="126.978000" placeholder="126.978000" required><span>° E</span></div>
+              <p class="inline-error" id="coordinates-error" role="alert" hidden></p>
+              <button type="submit" class="button primary wide"><span data-icon="navigate"></span>이 위치로 모두 이동<span data-icon="arrow-up-right"></span></button>
+            </form>
+            <p class="field-hint">입력한 지점 주변에서 제공되는 로드뷰가 열립니다.<br>촬영되지 않은 위치는 카카오맵에서 조정해 주세요.</p>
+          </div>
+
+          <div role="tabpanel" id="link-panel" aria-labelledby="link-tab" hidden>
+            <form id="link-form">
+              <label for="map-link" class="field-label">카카오맵 공유 링크</label>
+              <textarea id="map-link" placeholder="https://map.kakao.com/…&#10;또는 https://kko.to/…" rows="3" required></textarea>
+              <label for="link-target" class="field-label">이동할 화면</label>
+              <select id="link-target"><option value="all">모든 화면</option><option value="0">01 · 비교 시점 1</option><option value="1">02 · 비교 시점 2</option><option value="2">03 · 비교 시점 3</option><option value="3">04 · 비교 시점 4</option></select>
+              <p class="inline-error" id="link-error" role="alert" hidden></p>
+              <button type="submit" class="button primary wide"><span data-icon="link"></span>링크로 이동<span data-icon="arrow-up-right"></span></button>
+            </form>
+            <p class="field-hint">과거 로드뷰의 공유 링크도 붙여넣을 수 있습니다.<br>촬영 시기가 포함된 링크를 화면별로 열어보세요.</p>
+          </div>
+        </section>
+
+        <section class="saved-section">
+          <div class="section-title"><h2><span data-icon="history"></span>최근 위치</h2><button class="text-button" id="save-place"><span data-icon="bookmark"></span>저장</button></div>
+          <div id="recent-places"></div>
+          <div class="section-title saved-heading" id="saved-heading" hidden><h2><span data-icon="bookmark"></span>저장한 위치</h2></div>
+          <div id="saved-places"></div>
+        </section>
+
+        <div class="sidebar-tip"><span data-icon="clock"></span><div><strong>같은 장소, 서로 다른 시간</strong><p>각 로드뷰의 왼쪽 위 촬영일을 눌러<br>비교할 과거 사진을 골라주세요.</p></div></div>
+
+        <section class="other-maps" aria-label="다른 지도에서 열기"><span>다른 지도에서 위치 확인</span><div><button data-map="kakao">카카오맵<span data-icon="external"></span></button><button data-map="naver">네이버<span data-icon="external"></span></button><button data-map="google">Google<span data-icon="external"></span></button></div></section>
+      </div>
+      <button class="settings-button" id="settings-button"><span data-icon="settings"></span>주소 검색 연결 설정<span data-icon="chevron-right"></span></button>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-top">
+        <div class="workspace-heading"><div class="workspace-eyebrow"><i class="live-dot"></i> LOCATION COMPARISON</div><h2>시기별 로드뷰 비교<span id="view-count">4개 화면</span></h2><p>같은 거리에 쌓인 시간을 살펴보세요.</p></div>
+        <div class="workspace-controls"><div class="layout-switch" role="group" aria-label="화면 분할 수"><button id="split-two" aria-pressed="false"><span data-icon="split"></span>2분할</button><button id="split-four" aria-pressed="true"><span data-icon="grid"></span>4분할</button></div><button class="icon-button sidebar-toggle" id="sidebar-toggle" aria-label="왼쪽 메뉴 접기" title="왼쪽 메뉴 접기"><span data-icon="panel"></span></button></div>
+      </div>
+      <div class="workspace-notice"><span data-icon="info"></span><p id="workspace-notice">각 화면에서 <strong>촬영일</strong>을 선택하면 과거와 현재를 비교할 수 있습니다.</p><span class="connection-status" id="connection-status">연결 준비 중</span></div>
+      <div id="view-grid" class="view-grid layout-four" aria-label="시기별 로드뷰 화면"></div>
+      <footer class="workspace-footer"><span><span data-icon="mouse"></span>드래그로 둘러보기<span class="footer-dot">·</span>바닥 화살표로 이동<span class="footer-dot">·</span>휠로 확대</span><span>원본 로드뷰 및 촬영일 © Kakao</span></footer>
+    </main>
+  </div>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <div class="dialog-header"><div class="dialog-icon"><span data-icon="clock"></span></div><button class="icon-button" data-close-dialog aria-label="안내 닫기"><span data-icon="close"></span></button></div>
+    <p class="eyebrow">A SMALL WINDOW TO THE PAST</p><h2 id="help-title">시간을 나란히 놓는 방법</h2>
+    <div class="help-steps"><div><b>01</b><div><strong>궁금한 장소로 이동하세요.</strong><p>주소·장소를 검색하거나 WGS84 위도·경도, 카카오맵 링크를 입력하세요. 모든 화면이 같은 장소로 이동합니다.</p></div></div><div><b>02</b><div><strong>화면마다 촬영 시기를 고르세요.</strong><p>로드뷰 왼쪽 위의 시계·촬영일 메뉴에서 실제 제공되는 시기를 선택하세요. 화면 위 ‘촬영일 선택’ 버튼도 같은 메뉴를 엽니다.</p></div></div><div><b>03</b><div><strong>2분할 또는 4분할로 비교하세요.</strong><p>방향과 확대는 각 화면에서 조절합니다. 확대 버튼을 누르면 한 화면을 크게 볼 수 있으며, 다시 누르면 분할 화면으로 돌아옵니다.</p></div></div></div>
+    <div class="dialog-note"><span data-icon="info"></span><p>촬영일과 과거 사진의 제공 여부는 장소마다 다릅니다. 로드뷰에 표시되는 촬영일을 기준으로 확인해 주세요. 위치를 새로 이동하면 각 화면의 촬영 시기는 초기화됩니다.</p></div>
+    <button class="button dark wide" data-close-dialog>둘러보기 시작</button>
+  </dialog>
+
+  <dialog id="date-dialog" aria-labelledby="date-dialog-title">
+    <div class="dialog-header"><div class="dialog-icon"><span data-icon="clock"></span></div><button class="icon-button" data-close-dialog aria-label="촬영일 선택 닫기"><span data-icon="close"></span></button></div>
+    <p class="eyebrow">CHOOSE A MOMENT</p><h2 id="date-dialog-title">촬영 시기 선택</h2>
+    <p class="dialog-description">카카오맵 원본에서 실제 제공되는 촬영 시기입니다. 선택한 화면만 변경됩니다.</p>
+    <div id="date-loading" class="date-loading"><span class="spinner"></span><span>실제 촬영일 목록을 확인하고 있습니다…</span></div>
+    <p id="date-error" class="inline-error" role="alert" hidden></p><div id="date-options" class="date-options"></div>
+    <p class="field-hint">시기마다 촬영 지점이 조금 다를 수 있습니다.<br>원본 로드뷰의 촬영일을 함께 확인해 주세요.</p>
+  </dialog>
+  <dialog id="settings-dialog" aria-labelledby="settings-title">
+    <div class="dialog-header"><div class="dialog-icon"><span data-icon="settings"></span></div><button class="icon-button" data-close-dialog aria-label="설정 닫기"><span data-icon="close"></span></button></div>
+    <p class="eyebrow">SEARCH CONNECTION</p><h2 id="settings-title">더 정확한 국내 주소 검색</h2>
+    <p class="dialog-description">기본 검색은 OpenStreetMap을 이용합니다. 도로명·지번 주소와 국내 장소를 더 정확히 찾으려면 카카오 REST API 키를 연결하세요.</p>
+    <div class="settings-status" id="settings-status">기본 주소 검색 사용 중</div>
+    <form id="settings-form"><label class="field-label" for="api-key">카카오 REST API 키 <span>선택 사항</span></label><input type="password" id="api-key" placeholder="REST API 키 입력" autocomplete="off" maxlength="100"><p class="field-hint">로드뷰를 보는 데에는 API 키가 필요하지 않습니다.<br>키는 Windows 암호화 저장소로 보호해 이 PC에 저장합니다.</p><p id="settings-error" class="inline-error" role="alert" hidden></p><div class="settings-actions"><button type="button" class="button quiet" id="remove-key">연결 해제</button><button type="submit" class="button dark" id="save-key">검색 연결 저장</button></div></form>
+    <button class="text-button developer-link" id="developer-link">카카오 개발자 사이트 열기<span data-icon="external"></span></button>
+  </dialog>
+  <div class="toast" id="toast" role="status" hidden><span data-icon="check"></span><span id="toast-message"></span></div>
+</body>
+</html>

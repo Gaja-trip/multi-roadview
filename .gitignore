@@ -1,0 +1,6 @@
+node_modules/
+release/
+artifacts/
+.env
+*.log
+.pnpm-store/
