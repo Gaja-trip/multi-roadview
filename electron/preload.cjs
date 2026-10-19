@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('roadview', {
   reload: index => invoke('roadview:reload', index),
   openHistory: index => invoke('roadview:history', index),
   selectDate: payload => invoke('roadview:select-date', payload),
+  arrangePeriods: payload => invoke('roadview:arrange-periods', payload),
   setLink: payload => invoke('roadview:link', payload),
   openExternal: url => invoke('roadview:external', url),
   copy: text => invoke('roadview:copy', text),

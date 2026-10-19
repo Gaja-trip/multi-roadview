@@ -1,37 +1,47 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { readVisibleDate } = require('./frame-history.cjs');
 
 module.exports = async ({ app, mainWindow, panes, root }) => {
   const directory = path.join(root, 'artifacts');
   const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const js = script => mainWindow.webContents.executeJavaScript(script);
   let failed = false;
   await fs.mkdir(directory, { recursive: true });
   try {
-    // Exercise the same original iframe documents the user sees.
-    await mainWindow.webContents.executeJavaScript("document.querySelector('#split-four').click()");
+    let initialized = false;
     for (let attempt = 0; attempt < 100; attempt++) {
-      if (panes.size === 4 && [...panes.values()].every(pane => pane.state.date)) break;
+      initialized = await js("Boolean(document.querySelector('#compare-source-0 iframe'))");
+      if (initialized) break;
+      await pause(100);
+    }
+    if (!initialized) throw new Error('Local comparison UI did not initialize.');
+    await js("document.querySelector('#split-four').click(); document.querySelector('#period-menu-tab').click()");
+    let ready = false;
+    for (let attempt = 0; attempt < 160; attempt++) {
+      ready = await js("document.querySelector('#comparison-stage').dataset.periodState === 'ready' && document.querySelector('#comparison-stage').dataset.arranging === 'false'");
+      if (ready && panes.size === 4) break;
       await pause(400);
     }
-    if (panes.size !== 4 || [...panes.values()].some(pane => !pane.state.date)) throw new Error('Four dated original iframe documents did not load.');
-    const histories = await mainWindow.webContents.executeJavaScript('Promise.all([0,1,2,3].map(index => window.roadview.openHistory(index)))');
-    const selections = [];
-    for (let index = 0; index < 4; index++) {
-      if (histories[index].length < 2) throw new Error(`Pane ${index + 1}: no historical dates supplied by original controls.`);
-      const item = histories[index][Math.min(index * 2, histories[index].length - 1)];
-      const result = await mainWindow.webContents.executeJavaScript(`window.roadview.selectDate(${JSON.stringify({ index, panoId: item.panoId })})`);
-      selections.push({ index, requested: item.date, displayed: result.date });
+    if (!ready || panes.size !== 4) {
+      const state = await js("({stage:{...document.querySelector('#comparison-stage').dataset},status:document.querySelector('#period-status').textContent,errors:[...document.querySelectorAll('.period-editor .inline-error')].map(e=>e.textContent)})");
+      throw new Error('Four historical photos did not finish automatic arrangement: ' + JSON.stringify(state));
     }
+    await pause(2200);
     const diagnostics = [];
     for (const [index, pane] of panes) {
-      diagnostics.push({ index, state: pane.state, dom: await pane.frame.executeJavaScript(`(() => {
-        const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden'; };
-        return { date: [...document.querySelectorAll('[data-id="selectedDateBtn"], [data-id="nowDateBtn"]')].filter(visible).map(el => el.textContent.trim()), slider: document.querySelector('[data-id="slider"]')?.style.left, canvas: document.querySelectorAll('canvas').length };
+      diagnostics.push({ index, date: await readVisibleDate(pane.frame), dom: await pane.frame.executeJavaScript(`(() => {
+        const viewer = window.Application?.roadviewController?.viewer_?.();
+        const map = document.querySelector('[id="view.map"]');
+        return { point: viewer?.getViewpoint?.(), slider: document.querySelector('[data-id="slider"]')?.style.left, mapHidden: !map || getComputedStyle(map).opacity === '0' };
       })()`) });
     }
-    await fs.writeFile(path.join(directory, 'live-desktop.png'), (await mainWindow.webContents.capturePage()).toPNG());
-    await fs.writeFile(path.join(directory, 'history-results.json'), JSON.stringify({ diagnostics, histories, selections }, null, 2));
-    console.log('KEYLESS ORIGINAL HISTORY:', JSON.stringify(selections));
+    const years = diagnostics.map(pane => pane.date.match(/20\d{2}/)?.[0]);
+    if (new Set(years).size !== 4) throw new Error('Capture does not show four distinct offered years.');
+    if (diagnostics.some(pane => !pane.dom.mapHidden)) throw new Error('The original map still covers the panorama.');
+    await fs.writeFile(path.join(directory, 'year-comparison-desktop.png'), (await mainWindow.webContents.capturePage()).toPNG());
+    await fs.writeFile(path.join(directory, 'year-comparison-capture.json'), JSON.stringify({ diagnostics }, null, 2));
+    console.log('KEYLESS YEAR COMPARISON', JSON.stringify(diagnostics));
   } catch (error) {
     failed = true; console.error(error.stack);
     await fs.writeFile(path.join(directory, 'live-capture-error.txt'), error.stack);

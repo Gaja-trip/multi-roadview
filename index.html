@@ -108,14 +108,15 @@
           <div class="menu-intro"><p class="eyebrow">COMPARE VIEWS</p><h2>비교 화면 설정</h2><p>화면 수와 둘러보는 방식을 선택하세요.</p></div>
           <section class="menu-section"><h3>화면 나누기</h3><div class="layout-switch sidebar-layout" role="group" aria-label="비교 화면 수"><button id="split-two" aria-pressed="true"><span data-icon="split"></span>2분할</button><button id="split-four" aria-pressed="false"><span data-icon="grid"></span>4분할</button></div><p class="field-hint">2분할은 좌우, 4분할은 네 칸으로 배치합니다.</p></section>
           <section class="menu-section"><h3>비교 방식</h3><div class="compare-mode" role="group" aria-label="한 화면 비교 방식"><button id="compare-split" aria-pressed="true">분할</button><button id="compare-overlap" aria-pressed="false">겹침</button></div><p class="field-hint">겹침에서는 경계를 움직여 시기별 변화를 비교합니다.</p></section>
-          <section class="menu-section"><div class="section-title"><h3>화면 회전 연동</h3><label class="toggle-label"><input type="checkbox" id="rotation-enabled" checked>자동 회전</label></div><p class="sync-rule" id="sync-rule">180° 간격으로 함께 회전</p><div class="direction-preview" id="direction-preview" aria-label="화면별 방향 간격"></div><p class="field-hint">Windows 앱에서 어느 화면을 드래그해도 2분할은 180°, 4분할은 90° 간격으로 나머지 화면이 따라 움직입니다. 촬영 시기는 유지됩니다.</p><p class="sync-status" id="sync-status" role="status">회전 제어 연결을 확인하고 있습니다.</p></section>
+          <section class="menu-section"><div class="section-title"><h3>같은 방향으로 비교</h3><label class="toggle-label"><input type="checkbox" id="rotation-enabled" checked>방향 연동</label></div><p class="sync-rule" id="sync-rule">모든 촬영 시기를 같은 방향으로 비교</p><div class="direction-preview" id="direction-preview" aria-label="화면별 시선 방향"></div><p class="field-hint">Windows 앱에서 어느 사진을 드래그해도 나머지 사진이 같은 방향·기울기·확대로 따라옵니다. 촬영 연도별로 도로와 건물의 변화를 비교하세요.</p><p class="sync-status" id="sync-status" role="status">회전 제어 연결을 확인하고 있습니다.</p></section>
           <section class="menu-section"><h3>카카오맵 원본 로드뷰</h3><p class="field-hint">별도 키 없이 카카오맵 원본을 엽니다. 각 화면의 촬영일 선택에서 원본의 촬영일·시계 메뉴를 열어 과거 사진을 고를 수 있습니다.</p><button type="button" class="button quiet wide" id="keyless-help-button"><span data-icon="clock"></span>촬영일 선택 방법</button></section>
         </div>
         <div role="tabpanel" id="period-menu-panel" aria-labelledby="period-menu-tab" hidden>
-          <div class="menu-intro"><p class="eyebrow">DIFFERENT TIMES</p><h2>화면별 촬영 시기</h2><p>각 원본에서 서로 다른 촬영 시기를 골라보세요.</p></div>
-          <p class="period-guide">각 화면의 촬영일 선택으로 과거 사진을 고르세요. 카카오맵 위치 링크를 화면별로 지정할 수도 있습니다. 시기 이름을 입력했다면 원본의 촬영일과 일치하는지 확인해 주세요.</p>
+          <div class="menu-intro"><p class="eyebrow">DIFFERENT TIMES</p><h2>연도별 변화 비교</h2><p>같은 장소와 방향을 유지하며 서로 다른 해의 모습을 살펴보세요.</p></div>
+          <div class="period-auto"><button type="button" class="button primary wide" id="arrange-periods" disabled>서로 다른 연도 자동 배치</button><p id="period-status" class="field-hint" role="status">실제 제공되는 촬영 연도를 확인하고 있습니다.</p></div>
+          <p class="period-guide">Windows 앱은 A부터 과거 → 최신 순으로 실제 촬영 사진을 배치합니다. 사진 왼쪽 위에는 해당 사진의 촬영 연월이 표시됩니다. 아래에서 원하는 촬영일로 직접 바꿀 수 있습니다.</p>
           <div id="period-editors"></div>
-          <p class="field-hint">웹에서는 원본을 크게 열어 촬영일·시계 메뉴에서 날짜를 고릅니다. 시기 이름만 바꾸면 사진은 바뀌지 않습니다.</p>
+          <p class="field-hint">제공되는 촬영 연도는 장소마다 다릅니다. 웹에서는 원본을 크게 열어 촬영일·시계 메뉴에서 날짜를 직접 고릅니다.</p>
         </div>
       </div>
       <button class="settings-button" id="settings-button"><span data-icon="settings"></span>주소 검색 연결 설정<span data-icon="chevron-right"></span></button>
@@ -129,7 +130,7 @@
       <div class="workspace-notice"><span data-icon="info"></span><p id="workspace-notice">각 화면에서 <strong>촬영일</strong>을 선택하면 과거와 현재를 비교할 수 있습니다.</p><span class="connection-status" id="connection-status">연결 준비 중</span></div>
       <section class="comparison" id="comparison" aria-label="한 화면에서 두 시점 비교">
         <div class="comparison-toolbar"><strong><span data-icon="clock"></span><span id="compare-title">같은 장소 · 2개 시점</span></strong><span id="view-mode-status" class="view-mode-status">원본 보기 · 방향 개별 조절</span><button id="compare-back" hidden>비교로 돌아가기</button><button id="choose-periods">시기 설정</button></div>
-        <p class="compare-help" id="compare-help">각 화면의 <strong>촬영일 선택</strong>으로 과거 사진을 고르세요. 왼쪽 <strong>시기</strong> 탭에서는 촬영 시기와 원본 링크를 설정할 수 있습니다.</p>
+        <p class="compare-help" id="compare-help">Windows 앱은 서로 다른 실제 촬영 연도를 자동으로 배치합니다. <strong>왼쪽 위 촬영 연월</strong>을 누르면 원하는 시기로 바꿀 수 있습니다. 방향을 연동해 같은 풍경의 변화를 살펴보세요.</p>
         <div class="comparison-stage" id="comparison-stage" data-mode="split">
           <button class="wipe-handle" id="wipe-handle" role="slider" aria-label="가로 비교 경계" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-orientation="horizontal" hidden><span aria-hidden="true">↔</span></button>
           <button class="wipe-horizontal" id="wipe-horizontal" role="slider" aria-label="세로 비교 경계" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-orientation="vertical" hidden><span aria-hidden="true">↕</span></button>
@@ -144,7 +145,7 @@
   <dialog id="help-dialog" aria-labelledby="help-title">
     <div class="dialog-header"><div class="dialog-icon"><span data-icon="clock"></span></div><button class="icon-button" data-close-dialog aria-label="안내 닫기"><span data-icon="close"></span></button></div>
     <p class="eyebrow">A SMALL WINDOW TO THE PAST</p><h2 id="help-title">시간을 나란히 놓는 방법</h2>
-    <div class="help-steps"><div><b>01</b><div><strong>왼쪽 위치 탭에서 장소로 이동하세요.</strong><p>주소·좌표·카카오맵 링크로 모든 화면을 이동할 수 있습니다. 메뉴 숨기기로 로드뷰 영역을 넓히세요. 원본 로드뷰는 별도 키 없이 열립니다.</p></div></div><div><b>02</b><div><strong>각 화면의 촬영일 선택을 누르세요.</strong><p>웹에서는 원본을 크게 열어 촬영일·시계 메뉴에서 과거 사진을 고릅니다. Windows 앱에서는 제공되는 촬영일 목록에서 선택할 수 있습니다. 시기 탭에서 위치 링크를 지정하거나 시기 이름을 직접 적을 수도 있습니다.</p></div></div><div><b>03</b><div><strong>비교 탭에서 화면 배치와 자동 회전을 선택하세요.</strong><p>Windows 앱에서는 어느 화면을 드래그해도 2분할은 180°, 4분할은 90° 간격으로 나머지 화면이 함께 회전합니다. 촬영 시기는 유지되며, 자동 회전을 끄면 개별 조절할 수 있습니다. 겹침에서는 경계를 움직여 변화를 비교하세요. 일반 웹브라우저에서는 각 원본 화면을 직접 조절합니다.</p></div></div></div>
+    <div class="help-steps"><div><b>01</b><div><strong>왼쪽 위치 탭에서 장소로 이동하세요.</strong><p>주소·좌표·카카오맵 링크로 모든 화면을 이동할 수 있습니다. 메뉴 숨기기로 로드뷰 영역을 넓히세요. 원본 로드뷰는 별도 키 없이 열립니다.</p></div></div><div><b>02</b><div><strong>서로 다른 연도의 실제 사진을 비교하세요.</strong><p>Windows 앱은 제공되는 촬영 연도를 과거부터 최신까지 자동 배치합니다. 각 사진 왼쪽 위 촬영 연월을 누르거나 시기 탭에서 날짜를 직접 선택할 수 있습니다. 촬영 연도가 부족한 위치에서는 제공되는 범위만 표시합니다.</p></div></div><div><b>03</b><div><strong>같은 방향으로 돌려 변화를 확인하세요.</strong><p>방향 연동을 켜면 어느 화면을 움직여도 다른 연도의 화면이 같은 방향·기울기·확대로 따라옵니다. 2분할과 4분할 모두 같은 풍경을 비교하며, 방향 연동을 끄면 개별 조절합니다. 일반 웹브라우저에서는 각 원본의 촬영일과 방향을 직접 조절합니다.</p></div></div></div>
     <div class="dialog-note"><span data-icon="info"></span><p>촬영일과 과거 사진의 제공 여부는 장소마다 다릅니다. 로드뷰에 표시되는 촬영일을 기준으로 확인해 주세요. 위치를 새로 이동하면 각 화면의 촬영 시기는 초기화됩니다.</p></div>
     <button class="button dark wide" data-close-dialog>둘러보기 시작</button>
   </dialog>

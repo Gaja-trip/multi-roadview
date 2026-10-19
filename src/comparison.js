@@ -1,4 +1,5 @@
 import { createRoadviewFrame, kakaoUrl } from './web-api.js';
+import { captureDateKey, captureDateLabel } from './capture-date.js';
 
 const $ = selector => document.querySelector(selector);
 const LETTERS = ['A', 'B', 'C', 'D'];
@@ -6,10 +7,14 @@ const LETTERS = ['A', 'B', 'C', 'D'];
 export function createComparison(initialUrl, options = {}) {
   const stage = $('#comparison-stage');
   const frames = new Map(), urls = Array(4).fill(initialUrl), connected = new Set();
-  const periods = Array(4).fill(''), actualDates = Array(4).fill(''), editors = [], requestIds = Array(4).fill(0);
+  const actualDates = Array(4).fill(''), editors = [], requestIds = Array(4).fill(0);
   const versions = Array.from({ length: 4 }, () => crypto.randomUUID());
   const desktop = Boolean(options.api?.desktop);
+  stage.classList.toggle('native-comparison', desktop);
   const supportsRotation = desktop && typeof options.api?.rotation === 'function';
+  const supportsPeriods = desktop && typeof options.api?.arrangePeriods === 'function';
+  let arranging = false, arrangedKey = '', periodStatus = '', arrangementEpoch = 0;
+  const dateBusy = new Set();
   let rotationEnabled = true, rotationState = null, rotationConfiguration = '';
   try { rotationEnabled = localStorage.getItem('roadview-rotation-enabled') !== 'false'; } catch { /* Optional preference. */ }
   let mode = 'split', count = 2, x = 50, y = 50, focused = null;
@@ -24,6 +29,8 @@ export function createComparison(initialUrl, options = {}) {
     bearing.setAttribute('aria-label', `화면 ${LETTERS[index]} 현재 방향`);
     const title = document.createElement('button'); title.className = 'source-period';
     title.addEventListener('click', () => void openDates(index));
+    const captureDate = document.createElement('button'); captureDate.type = 'button'; captureDate.className = 'source-capture-date'; captureDate.hidden = !desktop;
+    captureDate.addEventListener('click', () => void openDates(index));
     function button(text, name, action) {
       const element = document.createElement('button'); element.type = 'button'; element.textContent = text;
       element.setAttribute('aria-label', `시점 ${LETTERS[index]} ${name}`); element.title = name;
@@ -33,11 +40,10 @@ export function createComparison(initialUrl, options = {}) {
     expand.dataset.expandSource = index;
     const reload = button('↻', '새로고침', () => reloadSource(index));
     const original = document.createElement('a'); original.href = urls[index]; original.target = '_blank'; original.rel = 'noopener noreferrer'; original.textContent = '© Kakao ↗'; original.title = `시점 ${LETTERS[index]} 원본 열기`;
-    label.append(badge, title, bearing, expand, reload, original); source.append(label); stage.prepend(source);
+    label.append(badge, title, bearing, expand, reload, original); source.append(label, captureDate); stage.prepend(source);
     const form = document.createElement('form'); form.className = 'period-editor'; form.dataset.index = index;
     const heading = document.createElement('h3'); heading.textContent = `화면 ${LETTERS[index]}`;
-    const periodLabel = document.createElement('label'); periodLabel.htmlFor = `period-label-${index}`; periodLabel.textContent = '촬영 시기 표시';
-    const periodInput = document.createElement('input'); periodInput.id = periodLabel.htmlFor; periodInput.maxLength = 24; periodInput.placeholder = '예: 2020.04 · 원본 촬영일 확인';
+    const currentDate = document.createElement('p'); currentDate.className = 'period-current-date';
     const urlLabel = document.createElement('label'); urlLabel.htmlFor = `period-url-${index}`; urlLabel.textContent = '카카오맵 위치 링크';
     const urlInput = document.createElement('input'); urlInput.id = urlLabel.htmlFor; urlInput.type = 'url'; urlInput.maxLength = 5000; urlInput.placeholder = 'https://map.kakao.com/…';
     const error = document.createElement('p'); error.className = 'inline-error'; error.setAttribute('role', 'alert'); error.hidden = true;
@@ -48,19 +54,24 @@ export function createComparison(initialUrl, options = {}) {
     const apply = document.createElement('button'); apply.type = 'submit'; apply.className = 'button quiet'; apply.textContent = '이 화면에 적용';
     const reset = document.createElement('button'); reset.type = 'button'; reset.className = 'text-button'; reset.textContent = '현재 위치로 초기화';
     reset.addEventListener('click', () => { navigate(initialUrl, index); options.notify?.(`화면 ${LETTERS[index]}를 현재 비교 위치로 초기화했습니다.`); });
-    actions.append(apply, reset); form.append(heading, chooseDate, dateOptions, error, periodLabel, periodInput, urlLabel, urlInput, actions);
+    const locationDetails = document.createElement('details'); locationDetails.className = 'period-location';
+    const summary = document.createElement('summary'); summary.textContent = '이 화면의 위치 링크 변경';
+    actions.append(apply, reset); locationDetails.append(summary, urlLabel, urlInput, actions);
+    form.append(heading, currentDate, chooseDate, dateOptions, error, locationDetails);
     form.addEventListener('submit', event => {
       event.preventDefault(); error.hidden = true;
       try {
-        const period = periodInput.value.trim(), link = urlInput.value.trim();
-        if (link) navigate(link, index);
-        periods[index] = period; periodInput.value = period; renderPeriod(index);
-        options.notify?.(urlInput.value.trim() ? `화면 ${LETTERS[index]}에 링크와 시기 표시를 적용했습니다. 원본 촬영일을 확인해 주세요.` : '시기 표시를 변경했습니다. 사진의 촬영 시기는 원본에서 직접 선택해 주세요.');
+        const link = urlInput.value.trim();
+        if (!link) throw new Error('카카오맵 위치 링크를 입력해 주세요.');
+        navigate(link, index);
+        options.notify?.(`화면 ${LETTERS[index]}의 위치를 변경했습니다. 제공되는 촬영 시기를 다시 확인합니다.`);
       } catch (problem) { error.textContent = problem.message; error.hidden = false; }
     });
-    editors.push({ form, periodInput, urlInput, error, chooseDate, dateOptions }); $('#period-editors').append(form); renderPeriod(index);
+    editors.push({ form, currentDate, urlInput, error, chooseDate, dateOptions }); $('#period-editors').append(form); renderPeriod(index);
   }
   async function openDates(index) {
+    if (dateBusy.has(index)) return;
+    if (arranging) { options.notify?.('서로 다른 촬영 연도를 배치하고 있습니다. 잠시 후 촬영일을 변경해 주세요.'); return; }
     options.openPeriods?.();
     const editor = editors[index], token = ++requestIds[index];
     editor.chooseDate.focus();
@@ -70,6 +81,8 @@ export function createComparison(initialUrl, options = {}) {
       options.notify?.(`화면 ${LETTERS[index]}를 크게 열었습니다. 원본 왼쪽 위 촬영일·시계에서 과거 사진을 선택한 뒤 비교로 돌아오세요.`);
       return;
     }
+    // An explicit date choice takes precedence over pending automatic setup.
+    arrangedKey = periodKey(); dateBusy.add(index); updatePeriodStatus();
     editor.chooseDate.disabled = true; editor.chooseDate.textContent = '촬영일 불러오는 중…';
     editor.dateOptions.replaceChildren(); editor.dateOptions.hidden = false;
     try {
@@ -77,37 +90,89 @@ export function createComparison(initialUrl, options = {}) {
       if (requestIds[index] !== token) return;
       if (!dates.length) throw new Error('제공되는 과거 촬영일을 찾지 못했습니다. 원본의 날짜 메뉴에서 확인해 주세요.');
       for (const item of dates) {
-        const button = document.createElement('button'); button.type = 'button'; button.className = 'date-option'; button.textContent = item.date;
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'date-option'; button.textContent = captureDateLabel(item.date) || item.date;
+        button.setAttribute('aria-pressed', String(captureDateKey(actualDates[index]) === captureDateKey(item.date)));
         button.addEventListener('click', async () => {
           if (requestIds[index] !== token) return;
           editor.error.hidden = true;
+          dateBusy.add(index); updatePeriodStatus();
           editor.dateOptions.querySelectorAll('button').forEach(option => { option.disabled = true; });
           try {
             const result = await options.api.selectDate({ index, panoId: item.panoId });
             if (requestIds[index] !== token) return;
             actualDates[index] = result.date; renderPeriod(index);
+            periodStatus = '촬영일을 직접 선택했습니다. 다른 화면의 촬영 시기는 유지됩니다.'; updatePeriodStatus();
             editor.dateOptions.hidden = true;
             options.notify?.(`화면 ${LETTERS[index]}를 ${result.date} 촬영분으로 변경했습니다.`);
           } catch (error) {
             if (requestIds[index] === token) { editor.error.textContent = error.message; editor.error.hidden = false; }
-          } finally { editor.dateOptions.querySelectorAll('button').forEach(option => { option.disabled = false; }); }
+          } finally { dateBusy.delete(index); editor.dateOptions.querySelectorAll('button').forEach(option => { option.disabled = false; }); updatePeriodStatus(); }
         });
         editor.dateOptions.append(button);
       }
     } catch (error) {
       if (requestIds[index] === token) { editor.error.textContent = error.message; editor.error.hidden = false; }
     } finally {
+      dateBusy.delete(index);
       if (requestIds[index] === token) { editor.chooseDate.disabled = false; editor.chooseDate.textContent = '촬영일 선택'; }
+      updatePeriodStatus();
     }
   }
   function renderPeriod(index) {
-    const title = $(`#compare-source-${index} .source-period`);
-    title.textContent = actualDates[index] || (periods[index] ? `${periods[index]} · 입력` : '촬영일 선택');
-    title.title = `촬영일 선택${actualDates[index] ? ` · 원본 촬영 ${actualDates[index]}` : periods[index] ? ' · 직접 입력한 표시는 원본 촬영일과 확인해 주세요' : ''}`;
+    const source = $(`#compare-source-${index}`), title = source.querySelector('.source-period');
+    const date = captureDateLabel(actualDates[index]);
+    title.textContent = '촬영일 변경';
+    title.title = `촬영일 선택${date ? ` · 실제 촬영 ${date}` : ''}`;
     title.setAttribute('aria-label', `화면 ${LETTERS[index]} ${title.title}`);
-    $(`#compare-source-${index}`).dataset.period = actualDates[index] || periods[index];
+    source.dataset.period = actualDates[index];
+    const badge = source.querySelector('.source-capture-date');
+    badge.textContent = date || '촬영일 확인 중…'; badge.dataset.confirmed = String(Boolean(date));
+    badge.setAttribute('aria-label', `화면 ${LETTERS[index]} ${date ? `실제 촬영 ${date} · 촬영일 변경` : '촬영일 확인 중'}`);
+    if (editors[index]) editors[index].currentDate.textContent = date || (desktop ? '실제 촬영일을 확인하고 있습니다.' : '원본 왼쪽 위 촬영일을 확인하세요.');
+  }
+  function periodKey() { return `${count}:${versions.slice(0, count).join(':')}`; }
+  function periodReady() { return actualDates.slice(0, count).every((date, index) => connected.has(index) && captureDateKey(date)); }
+  function updatePeriodStatus() {
+    const button = $('#arrange-periods');
+    button.disabled = !supportsPeriods || arranging || dateBusy.size > 0 || !periodReady();
+    button.textContent = arranging ? '촬영 연도 배치 중…' : '서로 다른 연도 자동 배치';
+    $('#period-status').textContent = !supportsPeriods ? '웹에서는 원본 촬영일 메뉴에서 화면마다 다른 연도를 직접 선택하세요. Windows 앱은 실제 촬영 연도를 자동으로 배치합니다.' : periodStatus || '원본 촬영일을 확인하면 과거부터 최신까지 서로 다른 연도로 자동 배치합니다.';
+    stage.dataset.arranging = String(arranging);
+    for (let index = 0; index < 4; index++) {
+      $(`#compare-source-${index} .source-period`).disabled = arranging || dateBusy.has(index);
+      $(`#compare-source-${index} .source-capture-date`).disabled = arranging || dateBusy.has(index);
+      editors[index].chooseDate.disabled = arranging || dateBusy.has(index);
+    }
+  }
+  async function arrangePeriods(force = false) {
+    if (!supportsPeriods || arranging || dateBusy.size || !periodReady()) return;
+    const key = periodKey(), epoch = arrangementEpoch;
+    if (!force && key === arrangedKey) return;
+    arrangedKey = key; arranging = true; periodStatus = '제공되는 실제 촬영일을 확인해 과거부터 최신 순으로 배치하고 있습니다.';
+    for (const editor of editors) { editor.dateOptions.hidden = true; editor.error.hidden = true; }
+    updatePeriodStatus(); updateConnection();
+    try {
+      const result = await options.api.arrangePeriods({ versions: versions.slice(0, count) });
+      if (key !== periodKey() || epoch !== arrangementEpoch) return;
+      for (const selection of result.selections) {
+        if (selection.version !== versions[selection.index]) continue;
+        actualDates[selection.index] = selection.date; renderPeriod(selection.index);
+      }
+      for (const problem of result.errors) { const editor = editors[problem.index]; editor.error.textContent = problem.error; editor.error.hidden = false; }
+      periodStatus = result.errors.length ? `${result.selections.length}/${count}개 화면의 촬영일을 배치했습니다. 연결되지 않은 화면의 촬영일을 다시 선택해 주세요.` : result.distinctYears < count ? `화면별 제공 목록에서 ${result.distinctYears}개 연도로 배치했습니다. 일부 화면은 같은 연도로 표시됩니다. 전체 제공 연도는 ${result.totalYears}개입니다.` : `${result.distinctYears}개 실제 촬영 연도를 ${result.chronological ? '과거부터 최신 순으로' : '화면별 제공 범위에서'} 배치했습니다. 각 화면의 촬영일을 직접 바꿀 수도 있습니다.`;
+      stage.dataset.periodState = result.errors.length ? 'partial' : 'ready';
+      options.notify?.(periodStatus);
+    } catch (error) {
+      if (key === periodKey() && epoch === arrangementEpoch) { periodStatus = error.message; stage.dataset.periodState = 'error'; }
+    } finally {
+      arranging = false; updatePeriodStatus(); updateConnection();
+      if (key !== periodKey() || epoch !== arrangementEpoch) {
+        arrangedKey = ''; void arrangePeriods();
+      }
+    }
   }
   function reloadSource(index) {
+    arrangementEpoch++; periodStatus = ''; stage.dataset.periodState = 'waiting';
     requestIds[index]++; actualDates[index] = '';
     versions[index] = crypto.randomUUID();
     const bearing = $(`#compare-source-${index} .source-bearing`); bearing.hidden = true;
@@ -124,7 +189,7 @@ export function createComparison(initialUrl, options = {}) {
       frame.name = `roadview-source-${index}-${versions[index]}`;
       frame.addEventListener('load', () => {
         connected.add(index); updateConnection();
-        void options.api?.frame?.({ index, version: versions[index], ready: true }).catch(() => {});
+        void options.api?.frame?.({ index, version: versions[index], ready: true }).then(() => arrangePeriods()).catch(() => {});
       });
       frames.set(index, frame); $(`#compare-source-${index}`).append(frame);
     }
@@ -135,10 +200,10 @@ export function createComparison(initialUrl, options = {}) {
     const state = rotationState;
     $('#rotation-enabled').disabled = !supportsRotation;
     $('#rotation-enabled').checked = supportsRotation && rotationEnabled;
-    $('#view-mode-status').textContent = supportsRotation && rotationEnabled ? state?.synchronized ? `자동 회전 · ${360 / count}° 간격` : `회전 연결 중 · ${state?.ready || 0}/${count}` : '키 없이 원본 보기 · 방향 개별 조절';
+    $('#view-mode-status').textContent = arranging ? '시기별 사진 배치 중…' : supportsRotation && rotationEnabled ? state?.synchronized ? '같은 방향으로 연동 중' : `회전 연결 중 · ${state?.ready || 0}/${count}` : '키 없이 원본 보기 · 방향 개별 조절';
     $('#sync-status').textContent = !supportsRotation ? '일반 웹브라우저에서는 원본 화면을 직접 조절합니다. 키 없는 자동 회전은 Windows 앱에서 사용할 수 있습니다.' : !rotationEnabled ? '자동 회전을 껐습니다. 각 화면을 따로 조절할 수 있습니다.' : state?.synchronized ? `화면 ${LETTERS[state.leader] || 'A'} 기준으로 ${count}개 화면의 방향·기울기·확대를 연동합니다. 각 화면의 촬영 시기는 유지합니다.` : state?.error || `로드뷰 회전 제어를 연결하는 중입니다. (${state?.ready || 0}/${count})`;
     $('#sync-status').classList.toggle('has-error', supportsRotation && rotationEnabled && Boolean(state?.error) && state?.ready === count);
-    $('#layout-summary').textContent = state?.synchronized && rotationEnabled ? `${count}분할 · ${360 / count}° 연동` : `${count}분할 · 비교 설정`;
+    $('#layout-summary').textContent = state?.synchronized && rotationEnabled ? `${count}분할 · 같은 방향` : `${count}분할 · 비교 설정`;
     for (let index = 0; index < 4; index++) {
       const bearing = $(`#compare-source-${index} .source-bearing`);
       const value = rotationEnabled && state?.views?.find(view => view.index === index && view.version === versions[index]);
@@ -185,11 +250,11 @@ export function createComparison(initialUrl, options = {}) {
     $('#wipe-handle').setAttribute('aria-valuenow', x); $('#wipe-horizontal').setAttribute('aria-valuenow', y);
     $('#wipe-center').setAttribute('aria-label', `4분할 경계 이동 · 가로 ${x}%, 세로 ${y}%. 방향키로 조절`);
     $('#compare-back').hidden = focused === null;
-    $('#sync-rule').textContent = `${360 / count}° 간격으로 함께 회전`;
+    $('#sync-rule').textContent = '모든 촬영 시기를 같은 방향으로 비교';
     $('#direction-preview').replaceChildren(...LETTERS.slice(0, count).map((letter, index) => {
-      const item = document.createElement('span'); item.textContent = `${letter} +${index * 360 / count}°`; return item;
+      const item = document.createElement('span'); item.textContent = `${letter} · 같은 방향`; return item;
     }));
-    configureRotation(); updateConnection();
+    configureRotation(); updateConnection(); updatePeriodStatus();
   }
   function position(nextX = x, nextY = y) { x = Math.round(Math.max(0, Math.min(100, nextX))); y = Math.round(Math.max(0, Math.min(100, nextY))); render(); }
   function setMode(value) { mode = value; focused = null; render(); }
@@ -222,7 +287,7 @@ export function createComparison(initialUrl, options = {}) {
     if (target === 'all') initialUrl = valid;
     (target === 'all' ? [0, 1, 2, 3] : [Number(target)]).forEach(index => {
       if (!Number.isInteger(index) || index < 0 || index > 3) return;
-      urls[index] = valid; periods[index] = ''; editors[index].periodInput.value = ''; editors[index].urlInput.value = target === 'all' ? '' : valid; editors[index].error.hidden = true;
+      urls[index] = valid; editors[index].urlInput.value = target === 'all' ? '' : valid; editors[index].error.hidden = true;
       reloadSource(index);
       $(`#compare-source-${index} a`).href = valid;
     });
@@ -230,6 +295,7 @@ export function createComparison(initialUrl, options = {}) {
   options.api?.onPane?.(({ index, date, version }) => {
     if (!Number.isInteger(index) || index < 0 || index > 3 || typeof date !== 'string' || version !== versions[index]) return;
     actualDates[index] = date; renderPeriod(index);
+    updatePeriodStatus(); void arrangePeriods();
   });
   options.api?.onRotation?.(state => {
     if (state.count !== count || state.enabled !== rotationEnabled) return;
@@ -240,8 +306,9 @@ export function createComparison(initialUrl, options = {}) {
     try { localStorage.setItem('roadview-rotation-enabled', String(rotationEnabled)); } catch { /* Optional preference. */ }
     configureRotation(); updateConnection();
   });
+  $('#arrange-periods').addEventListener('click', () => void arrangePeriods(true));
   return {
-    setCount(value) { count = value === 4 ? 4 : 2; focused = null; ensureFrames(); render(); },
+    setCount(value) { const next = value === 4 ? 4 : 2; if (next !== count) { arrangementEpoch++; stage.dataset.periodState = 'waiting'; periodStatus = ''; } count = next; focused = null; ensureFrames(); render(); void arrangePeriods(); },
     navigate,
   };
 }

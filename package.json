@@ -1,6 +1,6 @@
 {
   "name": "roadview-time",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "description": "같은 장소의 과거와 현재를 나란히 보는 로드뷰 멀티뷰",
   "main": "electron/main.cjs",

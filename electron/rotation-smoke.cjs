@@ -1,6 +1,7 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { angularDistance, normalize } = require('./rotation-sync.cjs');
+const { angularDistance } = require('./rotation-sync.cjs');
+const { readVisibleDate } = require('./frame-history.cjs');
 
 module.exports = async ({ app, mainWindow, root, rotation, getPane, readRotation }) => {
   const output = path.join(root, 'artifacts');
@@ -26,16 +27,31 @@ module.exports = async ({ app, mainWindow, root, rotation, getPane, readRotation
       const views = await readings(count);
       if (views.some(view => !view)) return false;
       const source = views[state.leader];
-      return views.every((view, index) => angularDistance(view.pan, normalize(source.pan + (index - state.leader) * 360 / count)) <= 1.5 && Math.abs(view.tilt - source.tilt) <= 1 && Math.abs(view.zoom - source.zoom) <= .01) && { state, views };
+      return views.every(view => angularDistance(view.pan, source.pan) <= 1.5 && Math.abs(view.tilt - source.tilt) <= 1 && Math.abs(view.zoom - source.zoom) <= .01) && { state, views };
     });
+  }
+  async function captureDates(count) {
+    return Promise.all(Array.from({ length: count }, (_, index) => readVisibleDate(getPane(index).frame)));
+  }
+  async function arranged(count) {
+    return waitFor(`${count} distinct real years`, async () => {
+      const state = await js(`(() => { const s=document.querySelector('#comparison-stage');return {count:Number(s.dataset.count),arranging:s.dataset.arranging,periodState:s.dataset.periodState,labels:[...s.querySelectorAll('.compare-source')].filter(e=>!e.classList.contains('source-inactive')).sort((a,b)=>a.dataset.index-b.dataset.index).map(e=>e.querySelector('.source-capture-date').textContent),status:document.querySelector('#period-status').textContent};})()`);
+      if (state.count !== count || state.arranging !== 'false' || state.periodState !== 'ready') return false;
+      const dates = await captureDates(count), years = dates.map(date => Number(date.match(/20\d{2}/)?.[0]));
+      if (new Set(years).size !== count || years.some((year,index)=>!year || index > 0 && year < years[index-1])) return false;
+      for (let index = 0; index < count; index++) {
+        const match = dates[index].match(/(20\d{2})\D+(\d{1,2})/);
+        if (state.labels[index] !== `${match[1]}년 ${Number(match[2])}월`) return false;
+      }
+      return { ...state, dates, years };
+    }, 65000);
   }
   async function drag(index, horizontal = -100, vertical = 0) {
     const rect = await js(`(() => { const r = document.querySelector('#compare-source-${index}').getBoundingClientRect(); return {x:r.x,y:r.y,width:r.width,height:r.height}; })()`);
     const x = Math.round(rect.x + rect.width * .67), y = Math.round(rect.y + 44 + (rect.height - 44) * .63);
     const wc = mainWindow.webContents;
     mainWindow.focus(); wc.focus();
-    // DevTools input reaches the real cross-origin hit-tested renderer even
-    // when the offscreen integration window has no OS keyboard focus.
+    // Hit-test real trusted input through the local window into Kakao's frame.
     if (!wc.debugger.isAttached()) wc.debugger.attach('1.3');
     const mouse = (type, mx, my, buttons = 0) => wc.debugger.sendCommand('Input.dispatchMouseEvent', { type, x: mx, y: my, button: buttons || type === 'mouseReleased' ? 'left' : 'none', buttons, clickCount: type === 'mouseMoved' ? 0 : 1 });
     await mouse('mouseMoved', x, y);
@@ -52,34 +68,44 @@ module.exports = async ({ app, mainWindow, root, rotation, getPane, readRotation
   let failed = false;
   try {
     await fs.mkdir(output, { recursive: true });
+    await waitFor('local comparison initialized', () => js("Boolean(document.querySelector('#compare-source-0 iframe'))"));
     await js("if (!document.querySelector('#rotation-enabled').checked) document.querySelector('#rotation-enabled').click(); document.querySelector('#compare-split').click(); document.querySelector('#split-two').click();");
+    record('2 panes automatically show oldest and newest real years', await arranged(2));
     const start = await synchronized(2);
-    record('2 panes initially opposite', start);
+    record('2 panes face the same absolute direction', start);
     await drag(1);
     const opposite = await synchronized(2, 1);
     if (angularDistance(start.views[1].pan, opposite.views[1].pan) < 5) throw new Error('Trusted drag did not rotate source B.');
     if (opposite.views.some((view, index) => view.panoId !== start.views[index].panoId || view.version !== start.views[index].version)) throw new Error('Rotation changed panorama or frame.');
-    record('B drag rotates A by 180 degrees', opposite);
+    record('B drag rotates A to the same direction and keeps dates', { ...opposite, dates: await captureDates(2) });
 
     await js("document.querySelector('#split-four').click()");
+    record('4 panes automatically show different real years in order', await arranged(4));
     const four = await synchronized(4);
-    record('4 panes initially spaced 90 degrees', four);
+    record('4 panes face the same absolute direction', four);
+    const fourDates = await captureDates(4);
     await drag(3, -85, 25);
     const fourth = await synchronized(4, 3);
     if (angularDistance(four.views[3].pan, fourth.views[3].pan) < 5) throw new Error('Trusted drag did not rotate source D.');
-    record('D drag rotates A B C by 90 degrees with tilt', fourth);
+    if (JSON.stringify(await captureDates(4)) !== JSON.stringify(fourDates)) throw new Error('Rotation changed capture dates.');
+    record('D drag rotates A B C to the same direction with tilt', { ...fourth, dates: fourDates });
 
-    const dates = await js('window.roadview.openHistory(1)');
-    if (dates.length < 2) throw new Error('Past date unavailable at demonstration location.');
-    const past = dates[dates.length - 1];
-    const selected = await js(`window.roadview.selectDate(${JSON.stringify({ index: 1, panoId: past.panoId })})`);
+    // Choose a specific offered date through the same sidebar UI as the user.
+    await js("document.querySelector('#compare-source-1 .source-capture-date').click()");
+    const dateButtons = await waitFor('manual date choices', () => js("(()=>{const p=document.querySelector('.period-editor[data-index=\"1\"] .date-options');return !p.hidden&&p.children.length?[...p.children].map(b=>({date:b.textContent,selected:b.getAttribute('aria-pressed')==='true'})):false})()"));
+    const choice = dateButtons.findIndex((button, index) => index > 0 && !button.selected);
+    if (choice < 0) throw new Error('No other offered capture date.');
+    await js(`document.querySelector('.period-editor[data-index="1"] .date-options').children[${choice}].click()`);
+    await waitFor('manual date applied', () => js("document.querySelector('.period-editor[data-index=\"1\"] .date-options').hidden && !document.querySelector('.period-editor[data-index=\"1\"] .inline-error').textContent"));
     await synchronized(4);
+    const manuallySelected = await captureDates(4);
     const historical = await getPane(1).frame.executeJavaScript("({date:document.querySelector('[data-id=selectedDateBtn]')?.textContent.trim(),slider:document.querySelector('[data-id=slider]')?.style.left})");
     await drag(1, 95);
     const historyRotated = await synchronized(4, 1);
     const after = await getPane(1).frame.executeJavaScript("({date:document.querySelector('[data-id=selectedDateBtn]')?.textContent.trim(),slider:document.querySelector('[data-id=slider]')?.style.left})");
     if (historical.date !== after.date || parseFloat(after.slider) < 99.9) throw new Error('Automatic rotation changed historical photo selection.');
-    record('Past date stays selected while B leads rotation', { requested: past.date, selected: selected.date, before: historical, after, ...historyRotated });
+    if (JSON.stringify(await captureDates(4)) !== JSON.stringify(manuallySelected)) throw new Error('Manual capture selection was overwritten.');
+    record('Manual past date stays selected while B leads same-heading rotation', { requested: dateButtons[choice].date, before: historical, after, dates: manuallySelected, ...historyRotated });
 
     await js("document.querySelector('#rotation-enabled').click()");
     await waitFor('rotation disabled', () => !rotation.getState().enabled);
@@ -92,13 +118,24 @@ module.exports = async ({ app, mainWindow, root, rotation, getPane, readRotation
     await synchronized(4, 0);
     const versions = (await readings(4)).map(view => view.version);
     await js("document.querySelector('#split-two').click()");
+    record('Returning to 2 panes restores oldest and newest years', await arranged(2));
     await synchronized(2);
-    await js("document.querySelector('#split-four').click(); document.querySelector('#open-compare-menu').click()");
+    await js("document.querySelector('#split-four').click()");
+    record('Returning to 4 panes restores distinct chronological years', await arranged(4));
     const restored = await synchronized(4);
     if (restored.views.some((view, index) => view.version !== versions[index])) throw new Error('Layout switch reloaded frames.');
-    record('2 to 4 layout switch reuses frames and updates offsets', restored);
-    await pause(1200);
-    await fs.writeFile(path.join(output, 'rotation-desktop.png'), (await mainWindow.webContents.capturePage()).toPNG());
+    record('2 to 4 layout switch reuses frames and preserves same direction', restored);
+    const blocked = await js("document.querySelector('#arrange-periods').click(); getComputedStyle(document.querySelector('#compare-source-0 iframe')).pointerEvents === 'none' && document.querySelector('#compare-source-0 .source-capture-date').disabled");
+    if (!blocked) throw new Error('Auto arrangement left original frame input enabled.');
+    await js("document.querySelector('#split-two').click(); document.querySelector('#split-four').click()");
+    record('Rapid 4 to 2 to 4 during an active arrangement recovers', await arranged(4));
+    await synchronized(4);
+    const minimapHidden = await getPane(3).frame.executeJavaScript("[...document.querySelectorAll('[id=\"view.map\"]')].every(el=>getComputedStyle(el).opacity==='0')");
+    if (!minimapHidden) throw new Error('Mini map covers the road comparison.');
+    record('Original mini map no longer covers the dated panorama', { minimapHidden });
+    await js("document.querySelector('#period-menu-tab').click()");
+    await pause(1500);
+    await fs.writeFile(path.join(output, 'year-comparison-desktop.png'), (await mainWindow.webContents.capturePage()).toPNG());
   } catch (error) {
     failed = true;
     console.error(error.stack);

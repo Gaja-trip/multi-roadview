@@ -40,6 +40,23 @@ test('과거 사진 화면의 날짜를 주소 표시줄에 남은 최신 ID와 
   assert.equal(pane.latestPano, null);
 });
 
+test('원본에서 확인했던 최신 촬영일은 같은 위치의 과거 사진에서 다시 선택할 수 있다', async () => {
+  const past = [{ panoId: '100', date: '2018.07' }];
+  const results = [
+    { currentDate: '2025년 11월', selectedDate: '', url: 'https://map.kakao.com/?panoid=300' }, past, undefined,
+    { currentDate: '', selectedDate: '2018년 7월', url: 'https://map.kakao.com/?panoid=300' }, past, undefined,
+    { currentDate: '', selectedDate: '2018년 7월', url: 'https://map.kakao.com/?panoid=300' }, past, undefined,
+  ];
+  const pane = paneWith(async () => results.shift());
+  const latest = [{ panoId: '300', date: '2025.11' }, ...past];
+  assert.deepEqual(await openHistory(pane), latest);
+  assert.deepEqual(await openHistory(pane), latest);
+  assert.equal(pane.latestPano, '300');
+  pane.generation++;
+  assert.deepEqual(await openHistory(pane), past);
+  assert.equal(pane.latestPano, null);
+});
+
 test('촬영일 전환 도중 iframe이 교체되면 이전 날짜를 새 화면에 기록하지 않는다', async () => {
   let release;
   const pane = paneWith(() => new Promise(resolve => { release = resolve; }));

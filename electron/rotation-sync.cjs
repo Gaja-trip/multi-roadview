@@ -67,7 +67,8 @@ function createRotationSync({ read, apply, onState = () => {}, now = Date.now })
       if (epoch !== currentEpoch || !enabled) return { ...state };
       const snapshot = snapshots[index];
       if (!snapshot || index === leader) continue;
-      const target = { pan: normalize(source.pan + (index - leader) * 360 / currentCount), tilt: source.tilt, zoom: source.zoom };
+      // Year-to-year comparison keeps every panorama on the same absolute camera.
+      const target = { pan: normalize(source.pan), tilt: source.tilt, zoom: source.zoom };
       if (aligned(snapshot, target)) continue;
       try {
         const result = await apply(index, target, snapshot);

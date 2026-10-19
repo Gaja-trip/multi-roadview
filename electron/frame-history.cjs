@@ -55,6 +55,18 @@ async function readVisibleDate(frame) {
   return frame.executeJavaScript(readDateScript);
 }
 
+async function prepareCaptureView(frame) {
+  // Keep the original controls laid out for date selection, while the app
+  // displays one verified capture date in a consistent corner of each pane.
+  return frame.executeJavaScript(`(() => {
+    if (document.getElementById('roadview-time-capture-labels')) return;
+    const style = document.createElement('style');
+    style.id = 'roadview-time-capture-labels';
+    style.textContent = '.info_roadview .txt_add,.info_roadview .info_date,[data-id="address"],[data-id="selectedDateBtn"],[data-id="currentDateContainer"],[data-id="minimap"],[data-id="minimapBtn"],[data-id="minimapContainer"],.view_minimap,[id="view.map"],[id="minimapEdge"]{opacity:0!important;pointer-events:none!important}';
+    document.head.append(style);
+  })()`);
+}
+
 async function openHistory(pane) {
   const snapshot = context(pane);
   pane.history = [];
@@ -108,8 +120,14 @@ async function openHistory(pane) {
       if (validId(id)) {
         latestPano = id;
         options.push({ panoId: id, date: dateKey(initial.currentDate) });
+        pane.latestCapture = { frame: snapshot.frame, generation: snapshot.generation, url: initial.url, panoId: id, date: dateKey(initial.currentDate) };
       }
     } catch { /* A date list can still be used when no live ID is available. */ }
+  }
+  const knownLatest = pane.latestCapture;
+  if (!latestPano && knownLatest?.frame === snapshot.frame && knownLatest.generation === snapshot.generation && knownLatest.url === initial.url) {
+    latestPano = knownLatest.panoId;
+    options.push({ panoId: knownLatest.panoId, date: knownLatest.date });
   }
   assertCurrent(pane, snapshot);
   pane.latestPano = latestPano;
@@ -202,4 +220,4 @@ async function selectDate(pane, panoId) {
   return displayed;
 }
 
-module.exports = { readVisibleDate, openHistory, selectDate };
+module.exports = { readVisibleDate, prepareCaptureView, openHistory, selectDate };

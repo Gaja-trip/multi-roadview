@@ -2,9 +2,10 @@ const { app, BrowserWindow, ipcMain, shell, clipboard, safeStorage, session, net
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
-const { readVisibleDate, openHistory, selectDate } = require('./frame-history.cjs');
+const { readVisibleDate, prepareCaptureView, openHistory, selectDate } = require('./frame-history.cjs');
 const { readRotation, applyRotation } = require('./frame-rotation.cjs');
 const { createRotationSync } = require('./rotation-sync.cjs');
+const { arrangePeriods } = require('./period-comparison.cjs');
 const { DEMO, coordinates, roadviewUrl, kakaoUrl, externalUrl, paneIndex, localSearch } = require('./domain.cjs');
 
 const root = path.join(__dirname, '..');
@@ -175,6 +176,7 @@ function registerIPC() {
   });
 
   handle('search', searchPlaces);
+  handle('arrange-periods', value => arrangePeriods(value || {}, { getPane, sendPane }));
   handle('reload', value => { const pane = getPane(paneIndex(value)); pane.generation++; pane.history = []; return pane.frame.reload(); });
   handle('history', async value => {
     const index = paneIndex(value), pane = getPane(index);
@@ -247,7 +249,10 @@ app.whenReady().then(async () => {
       pane.polling = true;
       try {
         const date = await readVisibleDate(frame);
-        if (pane.generation === generation && pane.frame === frame) sendPane(index, { status: 'connected', date, url: frame.url });
+        if (pane.generation === generation && pane.frame === frame && !pane.selecting) {
+          sendPane(index, { status: 'connected', date, url: frame.url });
+          if (date) await prepareCaptureView(frame);
+        }
       } catch { /* A source frame may be navigating. */ }
       finally { pane.polling = false; }
     }
