@@ -17,11 +17,13 @@ module.exports = async ({ app, mainWindow, panes, root }) => {
     }))()`);
     check('desktop renderer and shared comparison initialized', state.desktop && state.frames === 2 && state.sources === 4 && state.count === '2' && state.noGrid, JSON.stringify(state));
     check('iframe isolation and mini-map clipping', state.sandbox && state.overflow === 'clip');
-    check('no native views cover comparison', panes.size === 0);
+    check('date controls bind the displayed iframe documents', panes.size >= 2 && [...panes.values()].every(pane => pane.frame && !pane.view));
     const prefs = mainWindow.webContents.getLastWebPreferences();
     check('local renderer isolation', prefs.sandbox && prefs.contextIsolation && !prefs.nodeIntegration && prefs.webSecurity);
     const urls = mainWindow.webContents.mainFrame.frames.map(frame => frame.url);
     check('two real roadview documents loaded', urls.filter(url => url.startsWith('https://map.kakao.com/')).length === 2, JSON.stringify(urls));
+    const isolated = await Promise.all([...panes.values()].map(pane => pane.frame.executeJavaScript('typeof window.roadview')));
+    check('remote iframe documents receive no app preload', isolated.every(value => value === 'undefined'));
   } catch (error) { check('desktop startup', false, error.stack); }
   await fs.mkdir(path.join(root, 'artifacts'), { recursive: true });
   await fs.writeFile(path.join(root, 'artifacts', 'smoke-results.json'), JSON.stringify(checks, null, 2));

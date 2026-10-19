@@ -19,6 +19,7 @@ const ICONS = {
   external: '<path d="M15 3h6v6m0-6L11 13m-2-8H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/>',
   settings: '<path d="m9 3-.6 2.5-2.1 1.2L4 6l-2 3.5L4 11v2l-2 1.5L4 18l2.3-.7 2.1 1.2L9 21h6l.6-2.5 2.1-1.2 2.3.7 2-3.5-2-1.5v-2l2-1.5L20 6l-2.3.7-2.1-1.2L15 3Z"/><circle cx="12" cy="12" r="3"/>',
   'chevron-right': '<path d="m9 5 7 7-7 7"/>',
+  'chevron-left': '<path d="m15 5-7 7 7 7"/>',
   'chevron-down': '<path d="m6 9 6 6 6-6"/>',
   panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18m-3-6h.01M6 9h.01"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10h.01"/>',
@@ -55,7 +56,7 @@ function storePlaces(key, values) { try { localStorage.setItem(key, JSON.stringi
 
 const desktop = Boolean(window.roadview?.desktop);
 const api = window.roadview || createBrowserApi();
-const comparison = createComparison(DEMO.url);
+const comparison = createComparison(DEMO.url, { api, notify: toast, openPeriods: () => openSidebarTab('period') });
 
 let current = { ...DEMO };
 let baseUrl = DEMO.url;
@@ -65,6 +66,9 @@ let saved = readPlaces('roadview-saved');
 let toastTimer;
 let searching = false;
 let linkLocation = false;
+function preference(key, fallback = '') { try { return localStorage.getItem(key) ?? fallback; } catch { return fallback; } }
+function savePreference(key, value) { try { localStorage.setItem(key, String(value)); } catch { /* Optional browser preference. */ } }
+splitCount = preference('roadview-split-count') === '4' ? 4 : 2;
 function roadviewUrl(place) { return `https://map.kakao.com/link/roadview/${place.lat},${place.lng}`; }
 function toast(message) { $('#toast-message').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500); }
 function showError(id, message = '') { const element = $(`#${id}`); element.textContent = message; element.hidden = !message; }
@@ -123,25 +127,46 @@ function renderLayout() {
   $('#view-count').textContent = splitCount === 4 ? 'A · B · C · D' : 'A · B';
   $('#split-two').setAttribute('aria-pressed', String(splitCount === 2));
   $('#split-four').setAttribute('aria-pressed', String(splitCount === 4));
+  savePreference('roadview-split-count', splitCount);
 }
-function syncLayout() { return api.layout([]); }
 
 function selectTab(id) {
   $$('.search-tabs [role="tab"]').forEach(button => { const active = button.dataset.tab === id; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; $(`#${button.dataset.tab}-panel`).hidden = !active; });
 }
 
+function selectSidebarTab(id) {
+  if (!['location', 'compare', 'period'].includes(id)) id = 'location';
+  $$('.sidebar-tabs [role="tab"]').forEach(button => {
+    const active = button.dataset.menu === id;
+    button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1;
+    $(`#${button.dataset.menu}-menu-panel`).hidden = !active;
+  });
+  $('.sidebar-scroll').scrollTop = 0;
+  savePreference('roadview-sidebar-tab', id);
+}
+function openSidebarTab(id) { setSidebar(false); selectSidebarTab(id); $(`#${id}-menu-tab`).focus(); }
+
 function showDialog(id) {
   $(`#${id}`).showModal();
-  // Native child views must be detached while a local modal is visible.
-  syncLayout();
 }
 
 hydrateIcons(); renderLayout(); renderPlaces(); displayLocation();
-void syncLayout();
 if (!desktop) {
   $('#app-mode').textContent = '웹 로드뷰';
-  $('#workspace-notice').textContent = '카카오맵 원본의 촬영일을 선택해 비교하세요. 시기별 촬영 위치는 조금 다를 수 있습니다.';
+  $('#workspace-notice').textContent = '각 화면의 촬영일 선택으로 과거 사진을 고르세요. 실제 촬영일은 카카오맵 원본에서 확인할 수 있습니다.';
 }
+selectSidebarTab(preference('roadview-sidebar-tab', 'location'));
+$$('.sidebar-tabs [role="tab"]').forEach(button => {
+  button.addEventListener('click', () => selectSidebarTab(button.dataset.menu));
+  button.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault(); const tabs = $$('.sidebar-tabs [role="tab"]');
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (tabs.indexOf(button) + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    selectSidebarTab(tabs[index].dataset.menu); tabs[index].focus();
+  });
+});
+$('#open-compare-menu').addEventListener('click', () => openSidebarTab('compare'));
+$('#keyless-help-button').addEventListener('click', () => showDialog('help-dialog'));
 
 $$('.search-tabs [role="tab"]').forEach(button => {
   button.addEventListener('click', () => selectTab(button.dataset.tab));
@@ -195,6 +220,7 @@ $('#home').addEventListener('click', event => { event.preventDefault(); void saf
 $('#split-two').addEventListener('click', () => { splitCount = 2; renderLayout(); });
 $('#split-four').addEventListener('click', () => { splitCount = 4; renderLayout(); });
 function setSidebar(collapsed) {
+  if (collapsed && $('#sidebar').contains(document.activeElement)) $('#sidebar-toggle').focus();
   document.body.classList.toggle('sidebar-collapsed', collapsed);
   $('#sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
   $('#sidebar-toggle').title = collapsed ? '왼쪽 메뉴 보이기' : '왼쪽 메뉴 숨기기';
@@ -206,6 +232,7 @@ try { setSidebar(localStorage.getItem('roadview-sidebar-hidden') === 'true'); } 
 $('#sidebar-toggle').addEventListener('click', () => {
   setSidebar(!document.body.classList.contains('sidebar-collapsed'));
 });
+$('#sidebar-close').addEventListener('click', () => setSidebar(true));
 $('#copy-location').addEventListener('click', () => safely(async () => { await api.copy(baseUrl); toast('현재 비교 위치의 카카오맵 링크를 복사했습니다.'); }));
 $('#copy-coordinates').addEventListener('click', () => safely(async () => { await api.copy(`${current.lat.toFixed(6)}, ${current.lng.toFixed(6)}`); toast('위도·경도를 복사했습니다.'); }));
 $('#save-place').addEventListener('click', () => {

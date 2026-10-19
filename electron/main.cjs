@@ -1,13 +1,17 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, clipboard, safeStorage, session, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, clipboard, safeStorage, session, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
-const { DEMO, coordinates, roadviewUrl, kakaoUrl, externalUrl, paneIndex, bounds, localSearch } = require('./domain.cjs');
+const { readVisibleDate, openHistory, selectDate } = require('./frame-history.cjs');
+const { readRotation, applyRotation } = require('./frame-rotation.cjs');
+const { createRotationSync } = require('./rotation-sync.cjs');
+const { DEMO, coordinates, roadviewUrl, kakaoUrl, externalUrl, paneIndex, localSearch } = require('./domain.cjs');
 
 const root = path.join(__dirname, '..');
 const rendererUrl = pathToFileURL(path.join(root, 'index.html')).href;
 const smoke = process.argv.includes('--smoke-test');
 const capture = process.argv.includes('--integration-capture');
+const rotationTest = process.argv.includes('--rotation-test');
 let mainWindow;
 let target = { ...DEMO };
 let targetUrl = DEMO.url;
@@ -15,9 +19,35 @@ let searchQueue = Promise.resolve();
 let lastSearch = 0;
 const cache = new Map();
 const panes = new Map();
+const frameStates = new Map();
+const rotationReadings = new Map();
+let lastRotationMessage = '';
+function emitRotationState(state) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const views = [...rotationReadings].filter(([index, value]) => index < state.count && frameStates.get(index)?.version === value.version)
+    .map(([index, value]) => ({ index, version: value.version, pan: Math.round(value.pan), tilt: Math.round(value.tilt), zoom: value.zoom }));
+  const payload = { enabled: state.enabled, count: state.count, ready: state.ready, leader: state.leader, synchronized: state.synchronized, error: state.error, views };
+  const signature = JSON.stringify(payload);
+  if (signature !== lastRotationMessage) { lastRotationMessage = signature; mainWindow.webContents.send('roadview:rotation-state', payload); }
+}
+const rotation = createRotationSync({
+  async read(index) {
+    let pane; try { pane = getPane(index); } catch { rotationReadings.delete(index); return null; }
+    const value = await readRotation(pane);
+    if (value) rotationReadings.set(index, value); else rotationReadings.delete(index);
+    return value;
+  },
+  async apply(index, targetPoint, expected) {
+    let pane; try { pane = getPane(index); } catch { return { applied: false }; }
+    const result = await applyRotation(pane, targetPoint, expected);
+    if (result.applied) rotationReadings.set(index, { ...expected, ...result });
+    return result;
+  },
+  onState: emitRotationState,
+});
 // Keep the panorama compositor active while another window covers part of the app.
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
-if (smoke || capture) { fs.mkdirSync(path.join(root, 'artifacts'), { recursive: true }); app.setPath('userData', path.join(root, 'artifacts', 'smoke-profile')); }
+if (smoke || capture || rotationTest) { fs.mkdirSync(path.join(root, 'artifacts'), { recursive: true }); app.setPath('userData', path.join(root, 'artifacts', rotationTest ? 'rotation-profile' : 'smoke-profile')); }
 
 const readSettings = () => {
   try { return JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'settings.json'), 'utf8')); }
@@ -33,65 +63,29 @@ function sendPane(index, changes) {
   const pane = panes.get(index);
   if (!pane) return;
   Object.assign(pane.state, changes);
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('roadview:pane', { index, ...pane.state });
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('roadview:pane', { index, ...pane.state, version: pane.version });
 }
 
-function allowedNavigation(raw) {
-  try { const url = new URL(raw); return url.protocol === 'https:' && ['map.kakao.com', 'kko.to'].includes(url.hostname); }
-  catch { return false; }
-}
-
-function ensurePane(index) {
-  if (panes.has(index)) return panes.get(index);
-  const view = new WebContentsView({ webPreferences: {
-    nodeIntegration: false, contextIsolation: true, sandbox: true,
-    webSecurity: true, backgroundThrottling: false,
-    partition: 'persist:roadview-sites',
-  } });
-  const pane = { view, state: { status: 'idle', url: '', date: '', error: '' }, attached: false, loaded: false, history: [], generation: 0, nativeInput: false };
-  panes.set(index, pane);
-  view.setBackgroundColor('#f3f5f7');
-  const wc = view.webContents;
-  wc.on('before-mouse-event', (_event, mouse) => { if (mouse.type === 'mouseDown' && !pane.appSelecting) { pane.history = []; pane.nativeInput = true; } });
-  wc.on('before-input-event', () => { pane.history = []; pane.nativeInput = true; });
-  // Remote sites never receive the local preload or access to Node / application IPC.
-  wc.setWindowOpenHandler(({ url }) => {
-    try { void shell.openExternal(externalUrl(url)); } catch { /* Block non-map popups. */ }
-    return { action: 'deny' };
-  });
-  wc.on('will-navigate', (event, url) => { if (!allowedNavigation(url)) event.preventDefault(); });
-  wc.on('will-redirect', (event, url) => { if (!allowedNavigation(url)) event.preventDefault(); });
-  wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace) { pane.loaded = false; sendPane(index, { status: 'loading', error: '', date: '' }); }
-  });
-  wc.on('dom-ready', () => {
-    pane.loaded = true;
-    // The original 310px mini-map otherwise covers the date controls in a four-pane view.
-    void wc.insertCSS('@media(max-height:500px){[id="view.map"]{transform:scale(.42);transform-origin:bottom left}}');
-    sendPane(index, { status: 'connected', url: wc.getURL() });
-  });
-  wc.on('did-finish-load', () => {
-    pane.loaded = true;
-    sendPane(index, { status: 'connected', url: wc.getURL() });
-  });
-  wc.on('did-navigate-in-page', (_event, url) => sendPane(index, { url }));
-  wc.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
-    if (!isMainFrame || code === -3) return;
-    pane.loaded = false;
-    sendPane(index, { status: 'error', error: `카카오맵에 연결하지 못했습니다. 인터넷 연결을 확인하고 다시 시도해 주세요. (${code})` });
-  });
-  wc.on('render-process-gone', () => { pane.loaded = false; sendPane(index, { status: 'error', error: '로드뷰 화면이 종료되었습니다. 새로고침해 주세요.' }); });
-  loadPane(index, targetUrl);
+function getPane(index) {
+  paneIndex(index);
+  const active = frameStates.get(index);
+  if (!active?.ready) throw new Error('카카오맵 연결 후 촬영일을 선택할 수 있습니다.');
+  const frame = mainWindow?.webContents.mainFrame.frames.find(candidate => candidate.name === `roadview-source-${index}-${active.version}`);
+  if (!frame || frame.isDestroyed() || frame.detached) throw new Error('카카오맵 연결 후 촬영일을 선택할 수 있습니다.');
+  kakaoUrl(frame.url);
+  let pane = panes.get(index);
+  if (!pane) {
+    pane = { frame, version: active.version, state: { url: frame.url, date: '', status: 'connected', error: '' }, history: [], generation: 0, nativeInput: false };
+    panes.set(index, pane);
+  } else if (pane.frame !== frame || pane.state.url !== frame.url || pane.version !== active.version) {
+    pane.generation++; pane.frame = frame; pane.version = active.version; pane.history = []; pane.latestPano = null;
+    pane.state = { url: frame.url, date: '', status: 'connected', error: '' };
+  }
   return pane;
 }
 
-function loadPane(index, url, keepHistory = false) {
-  const pane = panes.get(index);
-  pane.generation++;
-  pane.nativeInput = false;
-  if (!keepHistory) pane.history = [];
-  sendPane(index, { url, status: 'loading', date: '', error: '' });
-  pane.view.webContents.loadURL(url).catch(() => { /* did-fail-load provides the user-facing error. */ });
+function invalidatePanes() {
+  for (const pane of panes.values()) { pane.generation++; pane.history = []; pane.state.date = ''; }
 }
 
 async function searchPlaces(raw) {
@@ -157,158 +151,53 @@ function registerIPC() {
       catch (error) { return { ok: false, error: error.message }; }
     });
   }
+  handle('frame', value => {
+    const index = paneIndex(value?.index), version = value?.version;
+    if (typeof version !== 'string' || !/^[a-f0-9-]{36}$/i.test(version) || typeof value.ready !== 'boolean') throw new Error('화면 연결 정보가 올바르지 않습니다.');
+    const previous = frameStates.get(index);
+    if (value.ready && previous && previous.version !== version) return false;
+    frameStates.set(index, { version, ready: value.ready });
+    if (!value.ready) rotationReadings.delete(index);
+    const pane = panes.get(index);
+    if (pane && (!value.ready || pane.version !== version)) { pane.generation++; pane.history = []; pane.state.date = ''; }
+    return true;
+  });
   handle('move', value => {
     target = { ...coordinates(value), name: String(value.name || '선택한 위치').slice(0, 150), address: String(value.address || '').slice(0, 300) };
-    targetUrl = roadviewUrl(target);
-    for (const [index] of panes) loadPane(index, targetUrl);
-    return target;
+    targetUrl = roadviewUrl(target); invalidatePanes(); return target;
   });
-  handle('layout', value => {
-    if (!Array.isArray(value) || value.length > 4) throw new Error('화면 구성이 올바르지 않습니다.');
-    const size = mainWindow.getContentBounds();
-    const visible = new Set();
-    for (const item of value) {
-      const index = paneIndex(item.index);
-      const rect = bounds(item, size);
-      if (!rect) continue;
-      visible.add(index);
-      const pane = ensurePane(index);
-      if (!pane.attached) { mainWindow.contentView.addChildView(pane.view); pane.attached = true; }
-      pane.view.setBounds(rect);
-      const zoom = rect.height < 300 ? 0.75 : 1;
-      if (!pane.appSelecting && pane.view.webContents.getZoomFactor() !== zoom) pane.view.webContents.setZoomFactor(zoom);
-      pane.view.setVisible(pane.state.status !== 'error');
-    }
-    for (const [index, pane] of panes) {
-      if (!visible.has(index) && pane.attached) { mainWindow.contentView.removeChildView(pane.view); pane.attached = false; }
-    }
-    return true;
+  // The renderer owns the sandboxed iframe layout. No native views cover it.
+  handle('layout', () => true);
+  handle('rotation', value => {
+    if (typeof value?.enabled !== 'boolean' || ![2, 4].includes(value.count)) throw new Error('자동 회전 설정이 올바르지 않습니다.');
+    const state = rotation.configure({ enabled: value.enabled, count: value.count });
+    lastRotationMessage = ''; emitRotationState(state); return state;
   });
+
   handle('search', searchPlaces);
-  handle('reload', value => {
-    const index = paneIndex(value), pane = panes.get(index);
-    if (pane) { pane.view.setVisible(true); pane.view.webContents.reload(); }
-    return true;
-  });
+  handle('reload', value => { const pane = getPane(paneIndex(value)); pane.generation++; pane.history = []; return pane.frame.reload(); });
   handle('history', async value => {
-    const pane = panes.get(paneIndex(value));
-    if (!pane?.loaded) throw new Error('카카오맵 연결 후 촬영일을 선택할 수 있습니다.');
-    if (!pane.state.date) throw new Error('로드뷰 촬영 정보를 아직 불러오는 중입니다. 이미지가 표시된 후 다시 선택해 주세요.');
-    if (pane.history.length > 1) return pane.history;
-    const generation = pane.generation;
-    const found = await pane.view.webContents.executeJavaScript(`(() => {
-      const visible = el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight && getComputedStyle(el).visibility !== 'hidden'; };
-      const button = [...document.querySelectorAll('[data-id="nowDateBtn"], [data-id="selectedDateBtn"]')].find(visible);
-      if (!button) return false;
-      if (!button.parentElement.classList.contains('opt_open')) button.click(); return true;
-    })()`);
-    if (!found) throw new Error('촬영 정보를 불러오는 중입니다. 잠시 후 다시 시도하거나 원본의 촬영일 메뉴를 이용해 주세요.');
-    let options = [];
-    for (let attempt = 0; attempt < 16; attempt++) {
-      options = await pane.view.webContents.executeJavaScript(`(() => {
-        return [...document.querySelectorAll('[data-id="pastIconContainer"] button[data-pano-id]')].map(button => ({
-          panoId: button.getAttribute('data-pano-id'), date: button.textContent.trim()
-        })).filter(item => /^\\d+$/.test(item.panoId) && /^20\\d{2}\\.\\d{2}$/.test(item.date));
-      })()`);
-      if (options.length) break;
-      await new Promise(resolve => setTimeout(resolve, 350));
-    }
-    await pane.view.webContents.executeJavaScript(`(() => {
-      const button = document.querySelector('[data-id="nowDateBtn"]');
-      if (button?.parentElement.classList.contains('opt_open')) button.click();
-    })()`);
-    if (pane.generation !== generation) throw new Error('위치가 변경되었습니다. 현재 위치의 촬영일을 다시 선택해 주세요.');
-    const base = new URL(pane.state.url);
-    const currentId = base.searchParams.get('panoid');
-    if (currentId && pane.state.date && !pane.nativeInput) options.push({ panoId: currentId, date: pane.state.date.replace(/년\s*/, '.').replace(/월.*/, '').trim() });
-    if (currentId && !pane.nativeInput) pane.latestPano = currentId;
-    pane.history = [...new Map(options.map(item => [item.panoId, item])).values()].sort((a, b) => b.date.localeCompare(a.date));
-    return pane.history;
+    const index = paneIndex(value), pane = getPane(index);
+    pane.state.date = await readVisibleDate(pane.frame);
+    if (pane.selecting) throw new Error('촬영일을 변경하는 중입니다. 잠시 후 다시 선택해 주세요.');
+    pane.selecting = true;
+    try { const dates = await openHistory(pane); sendPane(index, { date: pane.state.date }); return dates; }
+    finally { pane.selecting = false; }
   });
   handle('select-date', async value => {
-    const index = paneIndex(value?.index), pane = panes.get(index);
-    const item = pane?.history.find(item => item.panoId === value.panoId);
-    if (!item) throw new Error('해당 위치에서 제공되는 촬영일을 다시 선택해 주세요.');
-    const wc = pane.view.webContents;
-    const visible = `el => { if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight; }`;
-    const originalZoom = wc.getZoomFactor();
-    pane.appSelecting = true;
-    try {
-      if (item.panoId === pane.latestPano) {
-        await wc.executeJavaScript(`(() => { const visible = ${visible}; const back = document.querySelector('[data-id="backToRoadviewBtn"]'); if (visible(back)) back.click(); })()`);
-        return true;
-      }
-      // Historical IDs are not ordinary live-view URLs. Use the source site's actual
-      // history selector and comparison controls to render the historical photograph.
-      const result = await wc.executeJavaScript(`(() => {
-        const visible = ${visible};
-        const oldDate = document.querySelector('[data-id="selectedDateBtn"]');
-        const id = ${JSON.stringify(item.panoId)};
-        if (visible(oldDate)) {
-          const option = [...document.querySelectorAll('[data-id="dateList"] [data-pano-id]')].find(el => el.getAttribute('data-pano-id') === id);
-          if (!option) return 'missing'; option.click(); return 'compare';
-        }
-        const date = document.querySelector('[data-id="nowDateBtn"]');
-        if (!date) return 'missing';
-        if (!date.parentElement.classList.contains('opt_open')) date.click();
-        const option = [...document.querySelectorAll('[data-id="pastIconContainer"] button[data-pano-id]')].find(el => el.getAttribute('data-pano-id') === id);
-        if (!option) return 'missing'; option.click(); return 'thumbnail';
-      })()`);
-      if (result === 'missing') throw new Error('원본의 촬영일 선택기가 변경되었습니다. 로드뷰 안의 날짜 메뉴에서 선택해 주세요.');
-      if (result === 'thumbnail') {
-        let ready = false;
-        for (let attempt = 0; attempt < 20; attempt++) {
-          ready = await wc.executeJavaScript(`(() => { const visible = ${visible}; return visible(document.querySelector('[data-id="selectedDateBtn"]')); })()`);
-          if (ready) break;
-          await wc.executeJavaScript(`document.querySelector('[data-id="diffBtn"]')?.click()`);
-          await new Promise(resolve => setTimeout(resolve, 350));
-        }
-        if (!ready) throw new Error('과거 사진을 불러오는 중입니다. 잠시 후 같은 촬영일을 다시 선택해 주세요.');
-      }
-      await wc.executeJavaScript(`(() => { const id = ${JSON.stringify(item.panoId)}; [...document.querySelectorAll('[data-id="dateList"] [data-pano-id]')].find(el => el.getAttribute('data-pano-id') === id)?.click(); })()`);
-      wc.setZoomFactor(1);
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const slider = await wc.executeJavaScript(`(() => { const el = document.querySelector('[data-id="slider"]'); if (!el) return null; const r = el.getBoundingClientRect(); return { x:r.x+r.width/2, y:r.y+r.height/2, width:innerWidth }; })()`);
-      if (slider) {
-        const zoom = wc.getZoomFactor();
-        const x = Math.round(slider.x * zoom), y = Math.round(slider.y * zoom);
-        const endX = Math.floor(slider.width * zoom) - 1;
-        wc.focus();
-        wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 });
-        await new Promise(resolve => setTimeout(resolve, 50));
-        wc.sendInputEvent({ type: 'mouseMove', x: endX, y, movementX: endX - x, movementY: 0 });
-        await new Promise(resolve => setTimeout(resolve, 80));
-        wc.sendInputEvent({ type: 'mouseUp', x: endX, y, button: 'left', clickCount: 1 });
-      }
-      wc.setZoomFactor(originalZoom);
-      await new Promise(resolve => setTimeout(resolve, 150));
-      // Complete the native slider drag in document coordinates after zoom settles.
-      // This avoids Windows display scaling leaving a thin strip of the recent view.
-      await wc.executeJavaScript(`(() => {
-        const slider = document.querySelector('[data-id="slider"]');
-        if (!slider || parseFloat(slider.style.left) >= 99.9) return;
-        const rect = slider.getBoundingClientRect(), x = rect.x + rect.width / 2, y = rect.y + rect.height / 2;
-        const fire = (target, type, clientX, buttons) => {
-          const event = new MouseEvent(type, { view:window, bubbles:true, cancelable:true, clientX, clientY:y, button:0, buttons });
-          Object.defineProperty(event, 'which', { value:1 }); target.dispatchEvent(event);
-        };
-        fire(slider, 'mousedown', x, 1);
-        fire(document, 'mousemove', innerWidth + 30, 1);
-        fire(document, 'mouseup', innerWidth + 30, 0);
-      })()`);
-      await new Promise(resolve => setTimeout(resolve, 200));
-      const displayed = await wc.executeJavaScript(`document.querySelector('[data-id="selectedDateBtn"]')?.textContent.trim() || ''`);
-      if (displayed.replace(/\D/g, '') !== item.date.replace(/\D/g, '')) throw new Error('촬영일 전환을 확인하지 못했습니다. 같은 촬영일을 다시 선택해 주세요.');
-      sendPane(index, { date: displayed });
-      return true;
-    } finally { wc.setZoomFactor(originalZoom); pane.appSelecting = false; }
+    const index = paneIndex(value?.index), pane = getPane(index);
+    if (pane.selecting) throw new Error('촬영일을 변경하는 중입니다. 잠시 후 다시 선택해 주세요.');
+    pane.selecting = true;
+    try { const date = await selectDate(pane, value?.panoId); sendPane(index, { date }); return { date }; }
+    finally { pane.selecting = false; }
   });
   handle('link', value => {
     const url = kakaoUrl(value?.url);
-    if (value.index === 'all') { targetUrl = url; for (const [index] of panes) loadPane(index, url); }
-    else { const index = paneIndex(value.index); ensurePane(index); loadPane(index, url); }
+    if (value.index === 'all') { targetUrl = url; invalidatePanes(); }
+    else { const pane = panes.get(paneIndex(Number(value.index))); if (pane) { pane.generation++; pane.history = []; } }
     return url;
   });
+
   handle('external', value => shell.openExternal(externalUrl(value)));
   handle('copy', value => { if (typeof value !== 'string' || value.length > 5000) throw new Error('복사할 내용이 올바르지 않습니다.'); clipboard.writeText(value); return true; });
   handle('settings', () => ({ hasKey: Boolean(getKey()), encryption: safeStorage.isEncryptionAvailable() }));
@@ -326,8 +215,8 @@ async function createWindow() {
   mainWindow = new BrowserWindow({
     title: '로드뷰 타임 · 같은 장소, 다른 시간', width: 1500, height: 950,
     minWidth: 980, minHeight: 680, backgroundColor: '#f6f7f9',
-    show: !smoke, autoHideMenuBar: true,
-    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: false },
+    show: !smoke && !capture, autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.cjs'), nodeIntegration: false, contextIsolation: true, sandbox: true, webSecurity: true, backgroundThrottling: false, offscreen: smoke || capture },
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     try { void shell.openExternal(externalUrl(url)); } catch { /* Only approved map links may leave the app. */ }
@@ -335,37 +224,44 @@ async function createWindow() {
   });
   mainWindow.webContents.on('will-navigate', (event, url) => { if (url !== rendererUrl) event.preventDefault(); });
   mainWindow.on('closed', () => {
-    for (const pane of panes.values()) if (!pane.view.webContents.isDestroyed()) pane.view.webContents.close();
-    panes.clear(); mainWindow = null;
+    panes.clear(); frameStates.clear(); rotationReadings.clear(); mainWindow = null;
   });
-  await mainWindow.loadFile(path.join(root, 'index.html'));
+  const localReady = new Promise(resolve => mainWindow.webContents.once('dom-ready', resolve));
+  await Promise.race([mainWindow.loadURL(rendererUrl), localReady]);
+  if (smoke || capture) mainWindow.webContents.setFrameRate(30);
 }
 
 app.whenReady().then(async () => {
-  const remoteSession = session.fromPartition('persist:roadview-sites');
+  const remoteSession = session.defaultSession;
   remoteSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   remoteSession.setPermissionCheckHandler(() => false);
-  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   registerIPC();
   await createWindow();
-  // Read only the current, visible date label; hidden website templates are ignored.
+  // Observe the actual named comparison frames, including manual date changes.
   const timer = setInterval(async () => {
-    for (const [index, pane] of panes) {
-      if (!pane.loaded || !pane.attached || pane.polling || pane.view.webContents.isDestroyed()) continue;
+    for (let index = 0; index < 4; index++) {
+      let pane;
+      try { pane = getPane(index); } catch { continue; }
+      if (pane.polling || pane.selecting) continue;
+      const generation = pane.generation, frame = pane.frame;
       pane.polling = true;
       try {
-        const date = await pane.view.webContents.executeJavaScript(`(() => {
-          const labels = [...document.querySelectorAll('[data-id="nowDateBtn"], [data-id="selectedDateBtn"], [data-id="date"]')];
-          return labels.filter(el => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight && getComputedStyle(el).visibility !== 'hidden'; }).map(el => el.textContent.trim()).find(t => /20\\d{2}[년.]/.test(t)) || '';
-        })()`);
-        if (date !== pane.state.date) sendPane(index, { date });
-      } catch { /* The site may be navigating while its date is polled. */ }
+        const date = await readVisibleDate(frame);
+        if (pane.generation === generation && pane.frame === frame) sendPane(index, { status: 'connected', date, url: frame.url });
+      } catch { /* A source frame may be navigating. */ }
       finally { pane.polling = false; }
     }
   }, 2000);
+
   timer.unref();
+  const rotationTimer = setInterval(() => {
+    emitRotationState(rotation.getState());
+    void rotation.tick().then(emitRotationState).catch(() => {});
+  }, 80);
+  rotationTimer.unref();
   if (smoke) require('./smoke.cjs')({ app, mainWindow, panes, root });
   if (capture) require('./capture.cjs')({ app, mainWindow, panes, root, remoteSession, searchPlaces });
+  if (rotationTest) require('./rotation-smoke.cjs')({ app, mainWindow, panes, root, rotation, getPane, readRotation });
 });
 
 app.on('window-all-closed', () => app.quit());

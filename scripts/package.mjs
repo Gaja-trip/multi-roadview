@@ -14,7 +14,7 @@ await fs.copyFile(path.join(release, 'electron.exe'), path.join(release, 'Roadvi
 await fs.unlink(path.join(release, 'electron.exe'));
 for (const name of ['index.html', 'src', 'package.json', 'README.md']) await fs.cp(path.join(root, name), path.join(application, name), { recursive: true });
 await fs.mkdir(path.join(application, 'electron'), { recursive: true });
-for (const name of ['main.cjs', 'preload.cjs', 'domain.cjs']) await fs.copyFile(path.join(root, 'electron', name), path.join(application, 'electron', name));
+for (const name of ['main.cjs', 'preload.cjs', 'domain.cjs', 'frame-history.cjs', 'frame-rotation.cjs', 'rotation-sync.cjs']) await fs.copyFile(path.join(root, 'electron', name), path.join(application, 'electron', name));
 await fs.copyFile(path.join(root, 'README.md'), path.join(release, '사용안내.md'));
 console.log(`Windows 실행 파일: ${path.join(release, 'RoadviewTime.exe')}`);
 console.log('이 폴더 전체를 복사하면 Node.js 설치 없이 실행할 수 있습니다.');

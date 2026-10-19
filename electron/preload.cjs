@@ -7,6 +7,8 @@ const invoke = (channel, payload) => ipcRenderer.invoke(channel, payload).then(r
 
 contextBridge.exposeInMainWorld('roadview', {
   desktop: true,
+  frame: payload => invoke('roadview:frame', payload),
+  rotation: payload => invoke('roadview:rotation', payload),
   move: payload => invoke('roadview:move', payload),
   layout: payload => invoke('roadview:layout', payload),
   search: query => invoke('roadview:search', query),
@@ -22,5 +24,10 @@ contextBridge.exposeInMainWorld('roadview', {
     const handler = (_event, payload) => callback(payload);
     ipcRenderer.on('roadview:pane', handler);
     return () => ipcRenderer.removeListener('roadview:pane', handler);
+  },
+  onRotation: callback => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('roadview:rotation-state', handler);
+    return () => ipcRenderer.removeListener('roadview:rotation-state', handler);
   },
 });

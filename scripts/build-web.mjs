@@ -1,6 +1,11 @@
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import path from 'node:path';
 const root = new URL('../', import.meta.url), output = new URL('dist/', root);
+const rootPath = await fs.realpath(fileURLToPath(root));
+const outputPath = path.resolve(rootPath, 'dist');
+if (path.dirname(outputPath) !== rootPath || path.basename(outputPath) !== 'dist') throw new Error('빌드 출력 경로를 확인해 주세요.');
+await fs.rm(outputPath, { recursive: true, force: true });
 await fs.mkdir(output, { recursive: true });
 for (const name of ['index.html', 'src']) await fs.cp(new URL(name, root), new URL(name, output), { recursive: true });
 console.log(`웹 빌드 완료: ${fileURLToPath(output)}`);
