@@ -1,3 +1,6 @@
+import { createBrowserApi } from './web-api.js';
+import { createComparison } from './comparison.js';
+
 const $ = selector => document.querySelector(selector);
 const $$ = selector => [...document.querySelectorAll(selector)];
 const ICONS = {
@@ -51,34 +54,13 @@ function readPlaces(key) {
 function storePlaces(key, values) { try { localStorage.setItem(key, JSON.stringify(values)); } catch { /* Browsing can continue if local storage is full. */ } }
 
 const desktop = Boolean(window.roadview?.desktop);
-const api = window.roadview || {
-  desktop: false,
-  move: async value => value,
-  layout: async () => {},
-  search: async query => {
-    const normalized = query.replace(/\s/g, '').toLowerCase();
-    const places = PRESETS.filter(place => [place.name, place.address].some(value => value.replace(/\s/g, '').toLowerCase().includes(normalized)));
-    if (!places.length) throw new Error('브라우저 미리보기에서는 서울시청·광화문·강남역·부산역·제주공항을 검색할 수 있습니다. 일반 주소 검색은 Windows 앱에서 사용할 수 있습니다.');
-    return { places, source: 'preset' };
-  },
-  reload: async () => { throw new Error('Windows 앱에서 로드뷰를 새로고침할 수 있습니다.'); },
-  openHistory: async () => { throw new Error('Windows 앱을 실행하면 각 로드뷰의 촬영일을 선택할 수 있습니다.'); },
-  selectDate: async () => {},
-  setLink: async ({ url }) => {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || !['map.kakao.com', 'kko.to'].includes(parsed.hostname) || parsed.username || parsed.password || parsed.port) throw new Error('올바른 카카오맵 HTTPS 링크를 입력해 주세요.');
-    return parsed.href;
-  },
-  openExternal: async url => { window.open(url, '_blank', 'noopener,noreferrer'); },
-  copy: text => navigator.clipboard.writeText(text),
-  settings: async () => ({ hasKey: false, encryption: false }),
-  saveKey: async () => { throw new Error('검색 연결 설정은 Windows 앱에서 사용할 수 있습니다.'); },
-  onPane: () => () => {},
-};
+const api = window.roadview || createBrowserApi(DEMO.url);
+const comparison = createComparison(DEMO.url);
 
 let current = { ...DEMO };
 let baseUrl = DEMO.url;
 let splitCount = 4;
+let viewMode = 'compare';
 let focusedPane = null;
 let recent = readPlaces('roadview-recent');
 let saved = readPlaces('roadview-saved');
@@ -86,7 +68,7 @@ let toastTimer;
 let layoutFrame;
 let searching = false;
 let linkLocation = false;
-const paneStates = Array.from({ length: 4 }, () => ({ status: desktop ? 'idle' : 'preview', url: baseUrl, date: '', error: '' }));
+const paneStates = Array.from({ length: 4 }, () => ({ status: 'idle', url: baseUrl, date: '', error: '' }));
 function roadviewUrl(place) { return `https://map.kakao.com/link/roadview/${place.lat},${place.lng}`; }
 function toast(message) { $('#toast-message').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 6500); }
 function showError(id, message = '') { const element = $(`#${id}`); element.textContent = message; element.hidden = !message; }
@@ -133,14 +115,15 @@ async function moveTo(place) {
   await api.move(point);
   if (place.url) await api.setLink({ index: 'all', url: place.url });
   current = point; baseUrl = place.url || roadviewUrl(point); linkLocation = false;
+  comparison.navigate(baseUrl);
   for (let index = 0; index < 4; index++) {
-    paneStates[index] = { ...paneStates[index], url: baseUrl, date: '', error: '', status: desktop ? 'loading' : 'preview' };
+    paneStates[index] = { ...paneStates[index], url: baseUrl, date: '', error: '', status: 'loading' };
     updatePane(index);
   }
   recent = [point, ...recent.filter(item => !samePlace(item, point))].slice(0, 6);
   storePlaces('roadview-recent', recent); renderPlaces(); displayLocation();
   $('#search-results').replaceChildren(); showError('search-error');
-  toast(desktop ? `${point.name} 주변 로드뷰로 모든 화면을 이동합니다. 촬영일을 다시 선택해 주세요.` : `${point.name} 위치로 이동했습니다. 실제 로드뷰는 Windows 앱에서 열립니다.`);
+  toast(`${point.name} 주변 로드뷰로 모든 화면을 이동합니다. 촬영일을 다시 선택해 주세요.`);
 }
 
 function makeCards() {
@@ -170,18 +153,21 @@ function updatePane(index) {
   const visual = document.createElement('div'); visual.className = state.status === 'loading' ? 'spinner' : 'surface-icon';
   if (state.status !== 'loading') visual.innerHTML = icon(state.status === 'error' ? 'info' : 'panorama');
   const heading = document.createElement('h4');
-  heading.textContent = !desktop ? 'Windows 앱에서 로드뷰가 열립니다' : state.status === 'error' ? '로드뷰에 연결하지 못했습니다' : '카카오맵 로드뷰 연결 중';
+  heading.textContent = state.status === 'error' ? '로드뷰에 연결하지 못했습니다' : '카카오맵 로드뷰 연결 중';
   const description = document.createElement('p');
-  description.textContent = !desktop ? '2·4분할 화면과 위치 이동을 미리 살펴보세요. 과거 촬영일 비교는 Windows 앱에서 이용할 수 있습니다.' : state.error || '원본의 촬영일 메뉴에서 원하는 시기를 선택할 수 있습니다.';
+  description.textContent = state.error || '원본의 촬영일 메뉴에서 원하는 시기를 선택할 수 있습니다.';
   placeholder.append(visual, heading, description);
   const open = document.createElement('button'); open.className = 'text-button'; open.dataset.action = 'external'; open.textContent = '카카오맵에서 이 위치 보기 ↗'; placeholder.append(open);
   const connected = paneStates.slice(0, splitCount).filter(item => item.status === 'connected').length;
-  $('#connection-status').textContent = desktop ? `카카오맵 연결 ${connected}/${splitCount}` : 'Windows 앱 전용 로드뷰';
+  $('#connection-status').textContent = viewMode === 'compare' ? '촬영일은 원본에서 확인' : `카카오맵 연결 ${connected}/${splitCount}`;
   hydrateIcons(card);
   scheduleLayout();
 }
 
 function renderLayout() {
+  $('#view-grid').hidden = viewMode === 'compare';
+  $('#comparison').hidden = viewMode !== 'compare';
+  if (viewMode === 'compare') comparison.mount();
   $('#view-grid').className = `view-grid layout-${splitCount === 2 ? 'two' : 'four'}${focusedPane !== null ? ' focused' : ''}`;
   $$('.view-card').forEach((card, index) => {
     card.hidden = focusedPane !== null ? index !== focusedPane : index >= splitCount;
@@ -190,16 +176,17 @@ function renderLayout() {
     expand.title = focusedPane === index ? '분할 보기로 돌아가기' : '크게 보기';
     expand.innerHTML = icon(focusedPane === index ? 'collapse' : 'expand');
   });
-  $('#view-count').textContent = focusedPane !== null ? `${focusedPane + 1}번 화면 확대` : `${splitCount}개 화면`;
-  $('#split-two').setAttribute('aria-pressed', String(splitCount === 2)); $('#split-four').setAttribute('aria-pressed', String(splitCount === 4));
+  $('#view-count').textContent = viewMode === 'compare' ? 'A · B' : focusedPane !== null ? `${focusedPane + 1}번 화면 확대` : `${splitCount}개 화면`;
+  $('#single-compare').setAttribute('aria-pressed', String(viewMode === 'compare'));
+  $('#split-two').setAttribute('aria-pressed', String(viewMode === 'grid' && splitCount === 2)); $('#split-four').setAttribute('aria-pressed', String(viewMode === 'grid' && splitCount === 4));
   const connected = paneStates.slice(0, splitCount).filter(item => item.status === 'connected').length;
-  $('#connection-status').textContent = desktop ? `카카오맵 연결 ${connected}/${splitCount}` : 'Windows 앱 전용 로드뷰';
+  $('#connection-status').textContent = viewMode === 'compare' ? '촬영일은 원본에서 확인' : `카카오맵 연결 ${connected}/${splitCount}`;
   scheduleLayout();
 }
 
 function scheduleLayout() { clearTimeout(layoutFrame); layoutFrame = setTimeout(syncLayout, 16); }
 function syncLayout() {
-  const rects = document.querySelector('dialog[open]') ? [] : $$('.view-card:not([hidden]) .view-surface').map(element => {
+  const rects = viewMode === 'compare' || document.querySelector('dialog[open]') ? [] : $$('.view-card:not([hidden]) .view-surface').map(element => {
     const rect = element.getBoundingClientRect();
     return { index: Number(element.closest('.view-card').dataset.index), x: rect.x, y: rect.y, width: rect.width, height: rect.height };
   });
@@ -217,7 +204,7 @@ function showDialog(id) {
 }
 
 async function openDates(index) {
-  if (!desktop) { toast('Windows 앱에서 실제 촬영일을 선택할 수 있습니다.'); return; }
+  if (!desktop) { toast('각 로드뷰 원본의 왼쪽 위 촬영일·시계 버튼에서 과거 시기를 선택해 주세요. 크게 보기를 누르면 조작하기 편합니다.'); return; }
   $('#date-dialog-title').textContent = `${index + 1}번 화면의 촬영 시기`;
   $('#date-options').replaceChildren(); $('#date-loading').hidden = false; showError('date-error');
   showDialog('date-dialog');
@@ -245,10 +232,8 @@ new ResizeObserver(scheduleLayout).observe($('#view-grid'));
 window.addEventListener('resize', scheduleLayout);
 window.addEventListener('scroll', scheduleLayout, true);
 if (!desktop) {
-  $('#app-mode').classList.add('preview-tag'); $('#app-mode').textContent = '브라우저 미리보기';
-  $('#workspace-notice').textContent = '현재는 화면 미리보기입니다. 실제 과거·현재 로드뷰는 Windows 프로그램을 실행해 주세요.';
-  $('#search-hint').textContent = '미리보기: 서울시청·광화문·강남역·부산역·제주공항';
-  $('#search-credit').textContent = '브라우저 미리보기 · 로드뷰는 Windows 앱에서 제공';
+  $('#app-mode').textContent = '웹 로드뷰';
+  $('#workspace-notice').textContent = '카카오맵 원본의 촬영일을 선택해 비교하세요. 시기별 촬영 위치는 조금 다를 수 있습니다.';
 }
 
 $$('.search-tabs [role="tab"]').forEach(button => {
@@ -276,7 +261,7 @@ $('#address-form').addEventListener('submit', async event => {
       const address = document.createElement('p'); address.textContent = place.address;
       button.append(name, address); button.addEventListener('click', () => safely(() => moveTo(place))); $('#search-results').append(button);
     }
-    if (desktop) $('#search-credit').textContent = result.source === 'kakao' ? '주소·장소 검색 제공 © Kakao' : result.source === 'preset' ? '빠른 위치 · 대표 장소' : '주소 검색 © OpenStreetMap 기여자';
+    $('#search-credit').textContent = result.source === 'kakao' ? '주소·장소 검색 제공 © Kakao' : result.source === 'preset' ? '빠른 위치 · 대표 장소' : '주소 검색 © OpenStreetMap 기여자';
   } catch (error) { showError('search-error', error.message); }
   finally { searching = false; $('#search-submit').disabled = false; $('#search-submit>span:nth-child(2)').textContent = '위치 검색'; }
 });
@@ -291,20 +276,32 @@ $('#link-form').addEventListener('submit', async event => {
   try {
     const target = $('#link-target').value;
     const url = await api.setLink({ url: $('#map-link').value.trim(), index: target === 'all' ? 'all' : Number(target) });
+    comparison.navigate(url, target);
     if (target === 'all') { baseUrl = url; linkLocation = true; current = { ...current, name: '카카오맵 링크의 위치', address: '좌표는 지도 링크 원본에서 확인해 주세요.' }; displayLocation(); }
     const indexes = target === 'all' ? [0, 1, 2, 3] : [Number(target)];
-    for (const index of indexes) { paneStates[index] = { ...paneStates[index], url, date: '', status: desktop ? 'loading' : 'preview' }; updatePane(index); }
-    if (target !== 'all' && Number(target) >= splitCount) { splitCount = 4; focusedPane = null; renderLayout(); }
-    toast(desktop ? '지도 링크를 열었습니다. 원본 로드뷰의 촬영일을 확인해 주세요.' : '지도 링크가 적용되었습니다. Windows 앱에서 로드뷰를 볼 수 있습니다.');
+    for (const index of indexes) { paneStates[index] = { ...paneStates[index], url, date: '', status: 'loading' }; updatePane(index); }
+    if (target !== 'all' && (Number(target) >= splitCount || Number(target) >= 2)) { viewMode = 'grid'; splitCount = 4; focusedPane = null; renderLayout(); }
+    toast('지도 링크를 열었습니다. 원본 로드뷰의 촬영일을 확인해 주세요.');
   } catch (error) { showError('link-error', error.message || '올바른 카카오맵 링크를 입력해 주세요.'); }
 });
 
 $$('[data-preset]').forEach(button => button.addEventListener('click', () => safely(() => moveTo(PRESETS[Number(button.dataset.preset)]))));
 $('#home').addEventListener('click', event => { event.preventDefault(); void safely(() => moveTo(DEMO)); });
-$('#split-two').addEventListener('click', () => { splitCount = 2; focusedPane = null; renderLayout(); });
-$('#split-four').addEventListener('click', () => { splitCount = 4; focusedPane = null; renderLayout(); });
+$('#single-compare').addEventListener('click', () => { viewMode = 'compare'; focusedPane = null; renderLayout(); });
+$('#split-two').addEventListener('click', () => { viewMode = 'grid'; splitCount = 2; focusedPane = null; renderLayout(); });
+$('#split-four').addEventListener('click', () => { viewMode = 'grid'; splitCount = 4; focusedPane = null; renderLayout(); });
+function setSidebar(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  $('#sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
+  $('#sidebar-toggle').title = collapsed ? '왼쪽 메뉴 보이기' : '왼쪽 메뉴 숨기기';
+  $('#sidebar-toggle-label').textContent = collapsed ? '메뉴 보이기' : '메뉴 숨기기';
+  $('#sidebar').inert = collapsed;
+  try { localStorage.setItem('roadview-sidebar-hidden', String(collapsed)); } catch { /* Optional preference. */ }
+  scheduleLayout();
+}
+try { setSidebar(localStorage.getItem('roadview-sidebar-hidden') === 'true'); } catch { setSidebar(false); }
 $('#sidebar-toggle').addEventListener('click', () => {
-  const collapsed = document.body.classList.toggle('sidebar-collapsed'); $('#sidebar-toggle').setAttribute('aria-label', collapsed ? '왼쪽 메뉴 펼치기' : '왼쪽 메뉴 접기'); $('#sidebar-toggle').title = collapsed ? '왼쪽 메뉴 펼치기' : '왼쪽 메뉴 접기'; scheduleLayout();
+  setSidebar(!document.body.classList.contains('sidebar-collapsed'));
 });
 $('#copy-location').addEventListener('click', () => safely(async () => { await api.copy(baseUrl); toast('현재 비교 위치의 카카오맵 링크를 복사했습니다.'); }));
 $('#copy-coordinates').addEventListener('click', () => safely(async () => { await api.copy(`${current.lat.toFixed(6)}, ${current.lng.toFixed(6)}`); toast('위도·경도를 복사했습니다.'); }));
@@ -324,7 +321,7 @@ $$('[data-close-dialog]').forEach(button => button.addEventListener('click', () 
 $$('dialog').forEach(dialog => { dialog.addEventListener('close', scheduleLayout); dialog.addEventListener('click', event => { if (event.target === dialog) { const rect = dialog.getBoundingClientRect(); if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) dialog.close(); } }); });
 $('#settings-button').addEventListener('click', () => safely(async () => {
   const settings = await api.settings();
-  $('#settings-status').textContent = settings.hasKey ? '카카오 주소·장소 검색 연결됨' : desktop ? '기본 주소 검색 사용 중 · OpenStreetMap' : '연결 설정은 Windows 앱에서 사용할 수 있습니다.';
+  $('#settings-status').textContent = settings.hasKey ? '카카오 주소·장소 검색 연결됨' : desktop ? '기본 주소 검색 사용 중 · OpenStreetMap' : '웹 검색은 서버에서 연결합니다. 선택 사항: Vercel 환경 변수 KAKAO_REST_API_KEY 설정 후 재배포';
   $('#api-key').value = ''; $('#api-key').placeholder = settings.hasKey ? '새 키를 입력하면 연결을 교체합니다' : 'REST API 키 입력';
   $('#api-key').disabled = !settings.encryption; $('#save-key').disabled = !settings.encryption; $('#remove-key').disabled = !settings.hasKey;
   showError('settings-error'); showDialog('settings-dialog');

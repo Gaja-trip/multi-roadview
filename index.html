@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; frame-src https://map.kakao.com https://kko.to; base-uri 'none'; form-action 'none'">
   <meta name="theme-color" content="#f7f8fa">
   <title>로드뷰 타임 · 같은 장소, 다른 시간</title>
   <link rel="icon" href="./src/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./src/style.css">
+  <link rel="stylesheet" href="./src/comparison.css">
   <script type="module" src="./src/app.js"></script>
 </head>
 <body>
@@ -102,10 +103,20 @@
     <main class="workspace">
       <div class="workspace-top">
         <div class="workspace-heading"><div class="workspace-eyebrow"><i class="live-dot"></i> LOCATION COMPARISON</div><h2>시기별 로드뷰 비교<span id="view-count">4개 화면</span></h2><p>같은 거리에 쌓인 시간을 살펴보세요.</p></div>
-        <div class="workspace-controls"><div class="layout-switch" role="group" aria-label="화면 분할 수"><button id="split-two" aria-pressed="false"><span data-icon="split"></span>2분할</button><button id="split-four" aria-pressed="true"><span data-icon="grid"></span>4분할</button></div><button class="icon-button sidebar-toggle" id="sidebar-toggle" aria-label="왼쪽 메뉴 접기" title="왼쪽 메뉴 접기"><span data-icon="panel"></span></button></div>
+        <div class="workspace-controls"><div class="layout-switch" role="group" aria-label="화면 보기"><button id="single-compare" aria-pressed="true"><span data-icon="panorama"></span>한 화면 비교</button><button id="split-two" aria-pressed="false"><span data-icon="split"></span>2분할</button><button id="split-four" aria-pressed="false"><span data-icon="grid"></span>4분할</button></div><button class="icon-button sidebar-toggle" id="sidebar-toggle" aria-controls="sidebar" aria-expanded="true" title="왼쪽 메뉴 숨기기"><span data-icon="panel"></span><span id="sidebar-toggle-label">메뉴 숨기기</span></button></div>
       </div>
       <div class="workspace-notice"><span data-icon="info"></span><p id="workspace-notice">각 화면에서 <strong>촬영일</strong>을 선택하면 과거와 현재를 비교할 수 있습니다.</p><span class="connection-status" id="connection-status">연결 준비 중</span></div>
       <div id="view-grid" class="view-grid layout-four" aria-label="시기별 로드뷰 화면"></div>
+      <section class="comparison" id="comparison" aria-label="한 화면에서 두 시점 비교">
+        <div class="comparison-toolbar"><strong><span data-icon="clock"></span>같은 장소 · 두 시점</strong><div class="compare-mode" role="group" aria-label="한 화면 비교 방식"><button id="compare-overlap" aria-pressed="false">겹침</button><button id="compare-split" aria-pressed="true">분할</button></div><button id="choose-periods">시기 설정</button></div>
+        <p class="compare-help">먼저 <strong>분할</strong>에서 A·B 원본의 왼쪽 위 <strong>촬영일·시계</strong>로 시기를 고른 뒤, <strong>겹침</strong>에서 경계선을 움직여 비교하세요. 방향과 확대는 각 원본에서 맞춰 주세요.</p>
+        <div class="comparison-stage" id="comparison-stage" data-mode="split">
+          <div class="compare-source" id="compare-source-0"><div class="compare-source-label"><b>A</b><span>비교 시점</span><button data-compare-reload="0" aria-label="시점 A 새로고침" title="시점 A 새로고침">↻</button></div></div>
+          <div class="compare-source" id="compare-source-1"><div class="compare-source-label"><b>B</b><span>비교 시점</span><button data-compare-reload="1" aria-label="시점 B 새로고침" title="시점 B 새로고침">↻</button></div></div>
+          <button class="wipe-handle" id="wipe-handle" role="slider" aria-label="겹침 비교 경계" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" aria-orientation="horizontal" hidden><span aria-hidden="true">↔</span></button>
+        </div>
+        <div class="wipe-controls" id="wipe-controls" hidden><label for="wipe-range">A 표시 비율</label><input type="range" id="wipe-range" min="0" max="100" value="50"><output id="wipe-value" for="wipe-range">50%</output></div>
+      </section>
       <footer class="workspace-footer"><span><span data-icon="mouse"></span>드래그로 둘러보기<span class="footer-dot">·</span>바닥 화살표로 이동<span class="footer-dot">·</span>휠로 확대</span><span>원본 로드뷰 및 촬영일 © Kakao</span></footer>
     </main>
   </div>

@@ -1,0 +1,8 @@
+node_modules
+release
+artifacts
+.pnpm-store
+.env*
+tests
+electron/capture.cjs
+electron/smoke.cjs
